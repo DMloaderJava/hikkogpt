@@ -1,4 +1,5 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
+import { toast } from "sonner";
 
 export interface Message {
   id: string;
@@ -15,11 +16,7 @@ export interface Chat {
   updatedAt: Date;
 }
 
-const SAMPLE_RESPONSES = [
-  "Привет! Я готов помочь вам с любыми вопросами. Чем могу быть полезен?\n\nВот несколько примеров того, что я умею:\n\n- **Отвечать на вопросы** по различным темам\n- **Помогать с кодом** — писать, отлаживать, объяснять\n- **Генерировать тексты** — статьи, письма, сценарии\n- **Анализировать данные** и предлагать решения",
-  "Отличный вопрос! Давайте разберёмся подробнее.\n\nВот пример кода на Python:\n\n```python\ndef fibonacci(n):\n    if n <= 1:\n        return n\n    return fibonacci(n - 1) + fibonacci(n - 2)\n\n# Вывод первых 10 чисел\nfor i in range(10):\n    print(fibonacci(i))\n```\n\nЭтот рекурсивный подход прост, но для больших значений `n` лучше использовать итеративный вариант или мемоизацию.",
-  "Конечно! Вот несколько полезных советов:\n\n1. **Будьте конкретны** — чем точнее запрос, тем лучше ответ\n2. **Задавайте уточняющие вопросы** — не стесняйтесь переспрашивать\n3. **Экспериментируйте** — попробуйте разные формулировки\n\n> \"Единственный способ делать великую работу — любить то, что делаешь.\" — Стив Джобс",
-];
+const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat`;
 
 let chatIdCounter = 0;
 let messageIdCounter = 0;
@@ -32,6 +29,7 @@ export function useChat() {
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [selectedModel, setSelectedModel] = useState("GPT-4o");
+  const abortRef = useRef<AbortController | null>(null);
 
   const activeChat = chats.find((c) => c.id === activeChatId) || null;
 
@@ -67,6 +65,8 @@ export function useChat() {
   const sendMessage = useCallback(
     async (content: string) => {
       let chatId = activeChatId;
+      let existingMessages: Message[] = [];
+
       if (!chatId) {
         const newChat: Chat = {
           id: generateId("chat"),
@@ -78,6 +78,8 @@ export function useChat() {
         setChats((prev) => [newChat, ...prev]);
         chatId = newChat.id;
         setActiveChatId(chatId);
+      } else {
+        existingMessages = chats.find((c) => c.id === chatId)?.messages || [];
       }
 
       const userMessage: Message = {
@@ -87,7 +89,9 @@ export function useChat() {
         timestamp: new Date(),
       };
 
-      // Update title if first message
+      const assistantMsgId = generateMsgId();
+
+      // Add user message
       setChats((prev) =>
         prev.map((c) => {
           if (c.id !== chatId) return c;
@@ -103,52 +107,156 @@ export function useChat() {
         })
       );
 
-      // Simulate streaming response
+      // Build messages for API
+      const apiMessages = [
+        ...existingMessages.map((m) => ({ role: m.role, content: m.content })),
+        { role: "user" as const, content },
+      ];
+
       setIsStreaming(true);
-      const responseText =
-        SAMPLE_RESPONSES[Math.floor(Math.random() * SAMPLE_RESPONSES.length)];
+      const controller = new AbortController();
+      abortRef.current = controller;
 
-      const assistantMessage: Message = {
-        id: generateMsgId(),
-        role: "assistant",
-        content: "",
-        timestamp: new Date(),
-      };
+      try {
+        const resp = await fetch(CHAT_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+          },
+          body: JSON.stringify({ messages: apiMessages }),
+          signal: controller.signal,
+        });
 
-      setChats((prev) =>
-        prev.map((c) =>
-          c.id === chatId
-            ? { ...c, messages: [...c.messages, assistantMessage] }
-            : c
-        )
-      );
+        if (!resp.ok) {
+          const errData = await resp.json().catch(() => ({}));
+          const errMsg = errData.error || `Ошибка: ${resp.status}`;
+          toast.error(errMsg);
+          setIsStreaming(false);
+          return;
+        }
 
-      // Stream character by character
-      for (let i = 0; i <= responseText.length; i++) {
-        await new Promise((r) => setTimeout(r, 15));
-        const partial = responseText.slice(0, i);
+        if (!resp.body) {
+          toast.error("Нет ответа от сервера");
+          setIsStreaming(false);
+          return;
+        }
+
+        // Add empty assistant message
         setChats((prev) =>
           prev.map((c) =>
             c.id === chatId
               ? {
                   ...c,
-                  messages: c.messages.map((m) =>
-                    m.id === assistantMessage.id
-                      ? { ...m, content: partial }
-                      : m
-                  ),
+                  messages: [
+                    ...c.messages,
+                    { id: assistantMsgId, role: "assistant" as const, content: "", timestamp: new Date() },
+                  ],
                 }
               : c
           )
         );
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let textBuffer = "";
+        let assistantSoFar = "";
+        let streamDone = false;
+
+        while (!streamDone) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          textBuffer += decoder.decode(value, { stream: true });
+
+          let newlineIndex: number;
+          while ((newlineIndex = textBuffer.indexOf("\n")) !== -1) {
+            let line = textBuffer.slice(0, newlineIndex);
+            textBuffer = textBuffer.slice(newlineIndex + 1);
+
+            if (line.endsWith("\r")) line = line.slice(0, -1);
+            if (line.startsWith(":") || line.trim() === "") continue;
+            if (!line.startsWith("data: ")) continue;
+
+            const jsonStr = line.slice(6).trim();
+            if (jsonStr === "[DONE]") {
+              streamDone = true;
+              break;
+            }
+
+            try {
+              const parsed = JSON.parse(jsonStr);
+              const delta = parsed.choices?.[0]?.delta?.content as string | undefined;
+              if (delta) {
+                assistantSoFar += delta;
+                const snapshot = assistantSoFar;
+                setChats((prev) =>
+                  prev.map((c) =>
+                    c.id === chatId
+                      ? {
+                          ...c,
+                          messages: c.messages.map((m) =>
+                            m.id === assistantMsgId ? { ...m, content: snapshot } : m
+                          ),
+                        }
+                      : c
+                  )
+                );
+              }
+            } catch {
+              textBuffer = line + "\n" + textBuffer;
+              break;
+            }
+          }
+        }
+
+        // Final flush
+        if (textBuffer.trim()) {
+          for (let raw of textBuffer.split("\n")) {
+            if (!raw) continue;
+            if (raw.endsWith("\r")) raw = raw.slice(0, -1);
+            if (raw.startsWith(":") || raw.trim() === "") continue;
+            if (!raw.startsWith("data: ")) continue;
+            const jsonStr = raw.slice(6).trim();
+            if (jsonStr === "[DONE]") continue;
+            try {
+              const parsed = JSON.parse(jsonStr);
+              const delta = parsed.choices?.[0]?.delta?.content as string | undefined;
+              if (delta) {
+                assistantSoFar += delta;
+                const snapshot = assistantSoFar;
+                setChats((prev) =>
+                  prev.map((c) =>
+                    c.id === chatId
+                      ? {
+                          ...c,
+                          messages: c.messages.map((m) =>
+                            m.id === assistantMsgId ? { ...m, content: snapshot } : m
+                          ),
+                        }
+                      : c
+                  )
+                );
+              }
+            } catch { /* ignore */ }
+          }
+        }
+      } catch (e: unknown) {
+        if (e instanceof DOMException && e.name === "AbortError") {
+          // User stopped
+        } else {
+          console.error("Stream error:", e);
+          toast.error("Ошибка при получении ответа");
+        }
       }
 
       setIsStreaming(false);
+      abortRef.current = null;
     },
-    [activeChatId]
+    [activeChatId, chats]
   );
 
   const stopStreaming = useCallback(() => {
+    abortRef.current?.abort();
     setIsStreaming(false);
   }, []);
 
