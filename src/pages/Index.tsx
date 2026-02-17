@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Menu, Share, Moon, Sun } from "lucide-react";
+import { Menu, Share, Moon, Sun, LogOut } from "lucide-react";
 import { ChatSidebar } from "@/components/ChatSidebar";
 import { ChatInput } from "@/components/ChatInput";
 import { MessageBubble } from "@/components/MessageBubble";
@@ -7,6 +7,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { ModelSelector } from "@/components/ModelSelector";
 import { useChat } from "@/hooks/useChat";
 import { useTheme } from "@/hooks/useTheme";
+import { useAuth } from "@/hooks/useAuth";
 
 const Index = () => {
   const {
@@ -25,6 +26,7 @@ const Index = () => {
   } = useChat();
 
   const { isDark, toggle: toggleTheme } = useTheme();
+  const { user, signOut } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -50,6 +52,7 @@ const Index = () => {
           <ChatSidebar
             chats={chats}
             activeChatId={activeChatId}
+            userEmail={user?.email}
             onNewChat={createNewChat}
             onSelectChat={setActiveChatId}
             onDeleteChat={deleteChat}
@@ -81,6 +84,13 @@ const Index = () => {
             </button>
             <button className="rounded-lg p-2 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors">
               <Share className="h-5 w-5" />
+            </button>
+            <button
+              onClick={signOut}
+              className="rounded-lg p-2 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+              title="Выйти"
+            >
+              <LogOut className="h-5 w-5" />
             </button>
           </div>
         </header>

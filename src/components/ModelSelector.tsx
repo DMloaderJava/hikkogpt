@@ -7,9 +7,9 @@ interface ModelSelectorProps {
 }
 
 const models = [
-  { id: "GPT-4o", label: "GPT-4o", description: "Быстрый и умный", icon: Sparkles },
-  { id: "GPT-4", label: "GPT-4", description: "Самый точный", icon: Brain },
-  { id: "GPT-3.5", label: "GPT-3.5", description: "Быстрый", icon: Zap },
+  { id: "HikkoGPT", label: "HikkoGPT", description: "Самый умный", icon: Sparkles },
+  { id: "Алексей", label: "Алексей", description: "Точный и мощный", icon: Brain },
+  { id: "Арсений", label: "Арсений", description: "Быстрый", icon: Zap },
 ];
 
 export function ModelSelector({ selectedModel, onSelect }: ModelSelectorProps) {

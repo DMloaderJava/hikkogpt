@@ -28,7 +28,7 @@ export function useChat() {
   const [chats, setChats] = useState<Chat[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
-  const [selectedModel, setSelectedModel] = useState("GPT-4o");
+  const [selectedModel, setSelectedModel] = useState("HikkoGPT");
   const abortRef = useRef<AbortController | null>(null);
 
   const activeChat = chats.find((c) => c.id === activeChatId) || null;
@@ -124,7 +124,7 @@ export function useChat() {
             "Content-Type": "application/json",
             Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
           },
-          body: JSON.stringify({ messages: apiMessages }),
+          body: JSON.stringify({ messages: apiMessages, model: selectedModel }),
           signal: controller.signal,
         });
 
@@ -252,7 +252,7 @@ export function useChat() {
       setIsStreaming(false);
       abortRef.current = null;
     },
-    [activeChatId, chats]
+    [activeChatId, chats, selectedModel]
   );
 
   const stopStreaming = useCallback(() => {

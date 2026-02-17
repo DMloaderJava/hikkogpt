@@ -5,6 +5,7 @@ import type { Chat } from "@/hooks/useChat";
 interface ChatSidebarProps {
   chats: Chat[];
   activeChatId: string | null;
+  userEmail?: string;
   onNewChat: () => void;
   onSelectChat: (id: string) => void;
   onDeleteChat: (id: string) => void;
@@ -38,6 +39,7 @@ function groupChatsByDate(chats: Chat[]) {
 export function ChatSidebar({
   chats,
   activeChatId,
+  userEmail,
   onNewChat,
   onSelectChat,
   onDeleteChat,
@@ -66,7 +68,7 @@ export function ChatSidebar({
       <div className="flex items-center justify-between p-3">
         <div className="flex items-center gap-2">
           <Sparkles className="h-5 w-5" />
-          <span className="text-sm font-semibold">ChatGPT</span>
+          <span className="text-sm font-semibold">HikkoGPT</span>
         </div>
         <button
           onClick={onNewChat}
@@ -147,9 +149,9 @@ export function ChatSidebar({
       <div className="border-t border-sidebar-border p-3">
         <div className="flex items-center gap-2 rounded-lg px-2 py-2 text-sm hover:bg-sidebar-accent cursor-pointer transition-colors">
           <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-medium">
-            U
+            {userEmail?.[0]?.toUpperCase() || "U"}
           </div>
-          <span className="text-sm">User</span>
+          <span className="text-sm truncate">{userEmail || "User"}</span>
         </div>
       </div>
     </div>

@@ -12,9 +12,16 @@ serve(async (req) => {
   }
 
   try {
-    const { messages } = await req.json();
+    const { messages, model } = await req.json();
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
+
+    const modelMap: Record<string, string> = {
+      "HikkoGPT": "google/gemini-3-pro-preview",
+      "Алексей": "google/gemini-2.5-pro",
+      "Арсений": "google/gemini-2.5-flash",
+    };
+    const aiModel = modelMap[model] || "google/gemini-3-pro-preview";
 
     const response = await fetch(
       "https://ai.gateway.lovable.dev/v1/chat/completions",
@@ -25,7 +32,7 @@ serve(async (req) => {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "google/gemini-3-pro-preview",
+          model: aiModel,
           messages: [
             {
               role: "system",
