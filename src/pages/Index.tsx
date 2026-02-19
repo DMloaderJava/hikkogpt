@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Menu, Share, Moon, Sun, LogOut } from "lucide-react";
+import { Menu, Share, Moon, Sun, LogOut, Brain } from "lucide-react";
 import { ChatSidebar } from "@/components/ChatSidebar";
 import { ChatInput } from "@/components/ChatInput";
 import { MessageBubble } from "@/components/MessageBubble";
@@ -16,6 +16,8 @@ const Index = () => {
     activeChatId,
     isStreaming,
     selectedModel,
+    thinkingEnabled,
+    setThinkingEnabled,
     setSelectedModel,
     setActiveChatId,
     createNewChat,
@@ -76,6 +78,17 @@ const Index = () => {
           </div>
 
           <div className="flex items-center gap-1">
+            <button
+              onClick={() => setThinkingEnabled(!thinkingEnabled)}
+              className={`rounded-lg p-2 transition-colors ${
+                thinkingEnabled
+                  ? "bg-primary/10 text-primary"
+                  : "text-muted-foreground hover:bg-secondary hover:text-foreground"
+              }`}
+              title={thinkingEnabled ? "Thinking mode включён" : "Включить thinking mode"}
+            >
+              <Brain className="h-5 w-5" />
+            </button>
             <button
               onClick={toggleTheme}
               className="rounded-lg p-2 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"

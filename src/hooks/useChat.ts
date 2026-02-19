@@ -1,16 +1,21 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { toast } from "sonner";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/hooks/useAuth";
 
 export interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
+  image_url?: string;
+  thinking?: string;
   timestamp: Date;
 }
 
 export interface Chat {
   id: string;
   title: string;
+  model: string;
   messages: Message[];
   createdAt: Date;
   updatedAt: Date;
@@ -18,104 +23,208 @@ export interface Chat {
 
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat`;
 
-let chatIdCounter = 0;
-let messageIdCounter = 0;
-
-const generateId = (prefix: string) => `${prefix}_${++chatIdCounter}_${Date.now()}`;
-const generateMsgId = () => `msg_${++messageIdCounter}_${Date.now()}`;
-
 export function useChat() {
+  const { user } = useAuth();
   const [chats, setChats] = useState<Chat[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [selectedModel, setSelectedModel] = useState("HikkoGPT");
+  const [thinkingEnabled, setThinkingEnabled] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const loadedRef = useRef(false);
 
   const activeChat = chats.find((c) => c.id === activeChatId) || null;
 
-  const createNewChat = useCallback(() => {
+  // Load chats from DB on mount
+  useEffect(() => {
+    if (!user || loadedRef.current) return;
+    loadedRef.current = true;
+
+    (async () => {
+      const { data: dbChats, error } = await supabase
+        .from("chats")
+        .select("*")
+        .eq("user_id", user.id)
+        .order("updated_at", { ascending: false });
+
+      if (error || !dbChats) return;
+
+      const chatList: Chat[] = [];
+      for (const c of dbChats) {
+        const { data: msgs } = await supabase
+          .from("messages")
+          .select("*")
+          .eq("chat_id", c.id)
+          .order("created_at", { ascending: true });
+
+        chatList.push({
+          id: c.id,
+          title: c.title,
+          model: c.model,
+          messages: (msgs || []).map((m: any) => ({
+            id: m.id,
+            role: m.role,
+            content: m.content,
+            image_url: m.image_url || undefined,
+            timestamp: new Date(m.created_at),
+          })),
+          createdAt: new Date(c.created_at),
+          updatedAt: new Date(c.updated_at),
+        });
+      }
+      setChats(chatList);
+    })();
+  }, [user]);
+
+  const createNewChat = useCallback(async () => {
+    if (!user) return "";
+    const { data, error } = await supabase
+      .from("chats")
+      .insert({ user_id: user.id, title: "Новый чат", model: selectedModel })
+      .select()
+      .single();
+
+    if (error || !data) {
+      toast.error("Не удалось создать чат");
+      return "";
+    }
+
     const newChat: Chat = {
-      id: generateId("chat"),
-      title: "Новый чат",
+      id: data.id,
+      title: data.title,
+      model: data.model,
       messages: [],
-      createdAt: new Date(),
-      updatedAt: new Date(),
+      createdAt: new Date(data.created_at),
+      updatedAt: new Date(data.updated_at),
     };
     setChats((prev) => [newChat, ...prev]);
     setActiveChatId(newChat.id);
     return newChat.id;
-  }, []);
+  }, [user, selectedModel]);
 
   const deleteChat = useCallback(
-    (chatId: string) => {
+    async (chatId: string) => {
+      await supabase.from("chats").delete().eq("id", chatId);
       setChats((prev) => prev.filter((c) => c.id !== chatId));
-      if (activeChatId === chatId) {
-        setActiveChatId(null);
-      }
+      if (activeChatId === chatId) setActiveChatId(null);
     },
     [activeChatId]
   );
 
-  const renameChat = useCallback((chatId: string, title: string) => {
+  const renameChat = useCallback(async (chatId: string, title: string) => {
+    await supabase.from("chats").update({ title }).eq("id", chatId);
     setChats((prev) =>
       prev.map((c) => (c.id === chatId ? { ...c, title } : c))
     );
   }, []);
 
   const sendMessage = useCallback(
-    async (content: string) => {
+    async (content: string, imageBase64?: string) => {
+      if (!user) return;
       let chatId = activeChatId;
       let existingMessages: Message[] = [];
 
+      // Create chat if none active
       if (!chatId) {
+        const title = content.slice(0, 30) + (content.length > 30 ? "..." : "");
+        const { data, error } = await supabase
+          .from("chats")
+          .insert({ user_id: user.id, title, model: selectedModel })
+          .select()
+          .single();
+
+        if (error || !data) {
+          toast.error("Не удалось создать чат");
+          return;
+        }
+        chatId = data.id;
         const newChat: Chat = {
-          id: generateId("chat"),
-          title: content.slice(0, 30) + (content.length > 30 ? "..." : ""),
+          id: data.id,
+          title: data.title,
+          model: data.model,
           messages: [],
-          createdAt: new Date(),
-          updatedAt: new Date(),
+          createdAt: new Date(data.created_at),
+          updatedAt: new Date(data.updated_at),
         };
         setChats((prev) => [newChat, ...prev]);
-        chatId = newChat.id;
         setActiveChatId(chatId);
       } else {
         existingMessages = chats.find((c) => c.id === chatId)?.messages || [];
       }
 
+      // Insert user message to DB
+      const { data: userMsgData } = await supabase
+        .from("messages")
+        .insert({
+          chat_id: chatId,
+          role: "user",
+          content,
+          image_url: imageBase64 || null,
+        })
+        .select()
+        .single();
+
       const userMessage: Message = {
-        id: generateMsgId(),
+        id: userMsgData?.id || crypto.randomUUID(),
         role: "user",
         content,
+        image_url: imageBase64 || undefined,
         timestamp: new Date(),
       };
 
-      const assistantMsgId = generateMsgId();
+      // Update title if first message
+      const isFirst = existingMessages.length === 0;
+      if (isFirst) {
+        const title = content.slice(0, 30) + (content.length > 30 ? "..." : "");
+        await supabase.from("chats").update({ title }).eq("id", chatId);
+        setChats((prev) =>
+          prev.map((c) => (c.id === chatId ? { ...c, title, messages: [...c.messages, userMessage], updatedAt: new Date() } : c))
+        );
+      } else {
+        setChats((prev) =>
+          prev.map((c) => (c.id === chatId ? { ...c, messages: [...c.messages, userMessage], updatedAt: new Date() } : c))
+        );
+      }
 
-      // Add user message
-      setChats((prev) =>
-        prev.map((c) => {
-          if (c.id !== chatId) return c;
-          const isFirst = c.messages.length === 0;
-          return {
-            ...c,
-            messages: [...c.messages, userMessage],
-            title: isFirst
-              ? content.slice(0, 30) + (content.length > 30 ? "..." : "")
-              : c.title,
-            updatedAt: new Date(),
-          };
-        })
-      );
-
-      // Build messages for API
+      // Build API messages
       const apiMessages = [
-        ...existingMessages.map((m) => ({ role: m.role, content: m.content })),
-        { role: "user" as const, content },
+        ...existingMessages.map((m) => {
+          if (m.image_url) {
+            return {
+              role: m.role,
+              content: [
+                { type: "text", text: m.content },
+                { type: "image_url", image_url: { url: m.image_url } },
+              ],
+            };
+          }
+          return { role: m.role, content: m.content };
+        }),
+        imageBase64
+          ? {
+              role: "user" as const,
+              content: [
+                { type: "text", text: content },
+                { type: "image_url", image_url: { url: imageBase64 } },
+              ],
+            }
+          : { role: "user" as const, content },
       ];
 
       setIsStreaming(true);
       const controller = new AbortController();
       abortRef.current = controller;
+
+      const assistantMsgId = crypto.randomUUID();
+
+      // Add empty assistant message
+      setChats((prev) =>
+        prev.map((c) =>
+          c.id === chatId
+            ? { ...c, messages: [...c.messages, { id: assistantMsgId, role: "assistant" as const, content: "", thinking: "", timestamp: new Date() }] }
+            : c
+        )
+      );
 
       try {
         const resp = await fetch(CHAT_URL, {
@@ -124,14 +233,13 @@ export function useChat() {
             "Content-Type": "application/json",
             Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
           },
-          body: JSON.stringify({ messages: apiMessages, model: selectedModel }),
+          body: JSON.stringify({ messages: apiMessages, model: selectedModel, thinking: thinkingEnabled }),
           signal: controller.signal,
         });
 
         if (!resp.ok) {
           const errData = await resp.json().catch(() => ({}));
-          const errMsg = errData.error || `Ошибка: ${resp.status}`;
-          toast.error(errMsg);
+          toast.error(errData.error || `Ошибка: ${resp.status}`);
           setIsStreaming(false);
           return;
         }
@@ -142,25 +250,11 @@ export function useChat() {
           return;
         }
 
-        // Add empty assistant message
-        setChats((prev) =>
-          prev.map((c) =>
-            c.id === chatId
-              ? {
-                  ...c,
-                  messages: [
-                    ...c.messages,
-                    { id: assistantMsgId, role: "assistant" as const, content: "", timestamp: new Date() },
-                  ],
-                }
-              : c
-          )
-        );
-
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
         let textBuffer = "";
         let assistantSoFar = "";
+        let thinkingSoFar = "";
         let streamDone = false;
 
         while (!streamDone) {
@@ -185,17 +279,29 @@ export function useChat() {
 
             try {
               const parsed = JSON.parse(jsonStr);
-              const delta = parsed.choices?.[0]?.delta?.content as string | undefined;
-              if (delta) {
-                assistantSoFar += delta;
-                const snapshot = assistantSoFar;
+              const choice = parsed.choices?.[0];
+              const delta = choice?.delta;
+
+              // Check for thinking content
+              if (delta?.reasoning_content) {
+                thinkingSoFar += delta.reasoning_content;
+              }
+
+              const textDelta = delta?.content as string | undefined;
+              if (textDelta) {
+                assistantSoFar += textDelta;
+              }
+
+              if (textDelta || delta?.reasoning_content) {
+                const contentSnap = assistantSoFar;
+                const thinkingSnap = thinkingSoFar;
                 setChats((prev) =>
                   prev.map((c) =>
                     c.id === chatId
                       ? {
                           ...c,
                           messages: c.messages.map((m) =>
-                            m.id === assistantMsgId ? { ...m, content: snapshot } : m
+                            m.id === assistantMsgId ? { ...m, content: contentSnap, thinking: thinkingSnap } : m
                           ),
                         }
                       : c
@@ -220,26 +326,36 @@ export function useChat() {
             if (jsonStr === "[DONE]") continue;
             try {
               const parsed = JSON.parse(jsonStr);
-              const delta = parsed.choices?.[0]?.delta?.content as string | undefined;
-              if (delta) {
-                assistantSoFar += delta;
-                const snapshot = assistantSoFar;
-                setChats((prev) =>
-                  prev.map((c) =>
-                    c.id === chatId
-                      ? {
-                          ...c,
-                          messages: c.messages.map((m) =>
-                            m.id === assistantMsgId ? { ...m, content: snapshot } : m
-                          ),
-                        }
-                      : c
-                  )
-                );
-              }
+              const delta = parsed.choices?.[0]?.delta;
+              if (delta?.reasoning_content) thinkingSoFar += delta.reasoning_content;
+              if (delta?.content) assistantSoFar += delta.content;
             } catch { /* ignore */ }
           }
+          const contentSnap = assistantSoFar;
+          const thinkingSnap = thinkingSoFar;
+          setChats((prev) =>
+            prev.map((c) =>
+              c.id === chatId
+                ? {
+                    ...c,
+                    messages: c.messages.map((m) =>
+                      m.id === assistantMsgId ? { ...m, content: contentSnap, thinking: thinkingSnap } : m
+                    ),
+                  }
+                : c
+            )
+          );
         }
+
+        // Save assistant message to DB
+        await supabase.from("messages").insert({
+          chat_id: chatId,
+          role: "assistant",
+          content: assistantSoFar,
+        });
+
+        // Update chat updated_at
+        await supabase.from("chats").update({ updated_at: new Date().toISOString() }).eq("id", chatId);
       } catch (e: unknown) {
         if (e instanceof DOMException && e.name === "AbortError") {
           // User stopped
@@ -252,7 +368,7 @@ export function useChat() {
       setIsStreaming(false);
       abortRef.current = null;
     },
-    [activeChatId, chats, selectedModel]
+    [activeChatId, chats, selectedModel, thinkingEnabled, user]
   );
 
   const stopStreaming = useCallback(() => {
@@ -266,6 +382,8 @@ export function useChat() {
     activeChatId,
     isStreaming,
     selectedModel,
+    thinkingEnabled,
+    setThinkingEnabled,
     setSelectedModel,
     setActiveChatId,
     createNewChat,

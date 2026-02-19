@@ -1,4 +1,4 @@
-import { Copy, ThumbsUp, ThumbsDown, RotateCcw, Volume2, Pencil, Sparkles } from "lucide-react";
+import { Copy, ThumbsUp, ThumbsDown, RotateCcw, Volume2, Pencil, Sparkles, ChevronDown, ChevronRight, Brain } from "lucide-react";
 import { useState } from "react";
 import type { Message } from "@/hooks/useChat";
 
@@ -52,6 +52,21 @@ function renderContent(content: string) {
 
     if (inCodeBlock) {
       codeLines.push(line);
+      return;
+    }
+
+    // Image markdown: ![alt](url)
+    const imgMatch = line.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
+    if (imgMatch) {
+      parts.push(
+        <img
+          key={key++}
+          src={imgMatch[2]}
+          alt={imgMatch[1]}
+          className="my-3 max-w-full rounded-lg"
+          loading="lazy"
+        />
+      );
       return;
     }
 
@@ -119,6 +134,7 @@ function renderContent(content: string) {
 
 export function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false);
+  const [thinkingOpen, setThinkingOpen] = useState(false);
   const isUser = message.role === "user";
 
   const handleCopy = () => {
@@ -139,6 +155,36 @@ export function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
 
         {/* Content */}
         <div className={`flex-1 min-w-0 ${isUser ? "text-right" : ""}`}>
+          {/* User image attachment */}
+          {isUser && message.image_url && (
+            <div className="mb-2 flex justify-end">
+              <img
+                src={message.image_url}
+                alt="Attached"
+                className="max-h-48 rounded-lg object-cover border border-border"
+              />
+            </div>
+          )}
+
+          {/* Thinking block */}
+          {!isUser && message.thinking && (
+            <div className="mb-2">
+              <button
+                onClick={() => setThinkingOpen(!thinkingOpen)}
+                className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <Brain className="h-3.5 w-3.5" />
+                <span>Размышления</span>
+                {thinkingOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+              </button>
+              {thinkingOpen && (
+                <div className="mt-1.5 rounded-lg border border-border bg-secondary/50 p-3 text-xs text-muted-foreground whitespace-pre-wrap">
+                  {message.thinking}
+                </div>
+              )}
+            </div>
+          )}
+
           <div
             className={
               isUser
