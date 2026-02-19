@@ -1,15 +1,17 @@
 import { useState, useRef, useEffect } from "react";
-import { ArrowUp, Square, Paperclip } from "lucide-react";
+import { ArrowUp, Square, Paperclip, X, Image } from "lucide-react";
 
 interface ChatInputProps {
-  onSend: (message: string) => void;
+  onSend: (message: string, imageBase64?: string) => void;
   isStreaming: boolean;
   onStop: () => void;
 }
 
 export function ChatInput({ onSend, isStreaming, onStop }: ChatInputProps) {
   const [value, setValue] = useState("");
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -19,14 +21,33 @@ export function ChatInput({ onSend, isStreaming, onStop }: ChatInputProps) {
     }
   }, [value]);
 
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setImagePreview(reader.result as string);
+    };
+    reader.readAsDataURL(file);
+    // Reset input
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
   const handleSubmit = () => {
     if (isStreaming) {
       onStop();
       return;
     }
-    if (!value.trim()) return;
-    onSend(value.trim());
+    if (!value.trim() && !imagePreview) return;
+    onSend(value.trim() || "Что на этом изображении?", imagePreview || undefined);
     setValue("");
+    setImagePreview(null);
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
@@ -41,12 +62,39 @@ export function ChatInput({ onSend, isStreaming, onStop }: ChatInputProps) {
 
   return (
     <div className="mx-auto w-full max-w-3xl px-4 pb-4">
+      {/* Image preview */}
+      {imagePreview && (
+        <div className="mb-2 flex items-start gap-2">
+          <div className="relative">
+            <img
+              src={imagePreview}
+              alt="Preview"
+              className="h-20 w-20 rounded-lg object-cover border border-border"
+            />
+            <button
+              onClick={() => setImagePreview(null)}
+              className="absolute -top-1.5 -right-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-destructive text-destructive-foreground text-xs"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="relative flex items-end rounded-2xl border border-border bg-secondary/50 shadow-sm transition-colors focus-within:border-ring/50">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={handleFileSelect}
+        />
         <button
+          onClick={() => fileInputRef.current?.click()}
           className="flex-shrink-0 p-3 text-muted-foreground hover:text-foreground transition-colors"
-          title="Прикрепить файл"
+          title="Прикрепить изображение"
         >
-          <Paperclip className="h-5 w-5" />
+          <Image className="h-5 w-5" />
         </button>
 
         <textarea
@@ -61,11 +109,11 @@ export function ChatInput({ onSend, isStreaming, onStop }: ChatInputProps) {
 
         <button
           onClick={handleSubmit}
-          disabled={!isStreaming && !value.trim()}
+          disabled={!isStreaming && !value.trim() && !imagePreview}
           className={`m-2 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg transition-colors ${
             isStreaming
               ? "bg-foreground text-background"
-              : value.trim()
+              : value.trim() || imagePreview
               ? "bg-foreground text-background hover:opacity-80"
               : "bg-muted text-muted-foreground cursor-not-allowed"
           }`}

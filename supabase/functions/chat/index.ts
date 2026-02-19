@@ -12,7 +12,7 @@ serve(async (req) => {
   }
 
   try {
-    const { messages, model } = await req.json();
+    const { messages, model, thinking } = await req.json();
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
 
@@ -35,8 +35,26 @@ serve(async (req) => {
 Ограничения: не упоминай интимные темы, жестокость, угрозы, агрессию или дискриминацию. Не обсуждай опасные действия или запрещённый контент. Не проси и не публикуй чьи-то личные данные.`,
     };
 
-    const defaultSystemPrompt = "Ты — полезный AI-ассистент. Отвечай чётко и по существу. Поддерживай форматирование Markdown: заголовки, списки, блоки кода и т.д.";
+    const defaultSystemPrompt = "Ты — полезный AI-ассистент. Отвечай чётко и по существу. Поддерживай форматирование Markdown: заголовки, списки, блоки кода и т.д. Если тебя просят найти изображение, вставь ссылку в формате Markdown: ![описание](url)";
     const systemContent = systemPrompts[model] || defaultSystemPrompt;
+
+    // Build request body
+    const body: any = {
+      model: aiModel,
+      messages: [
+        { role: "system", content: systemContent },
+        ...messages,
+      ],
+      stream: true,
+    };
+
+    // Add thinking config for supported models
+    if (thinking) {
+      if (aiModel.includes("gemini-2.5")) {
+        body.thinking = { type: "enabled", budget_tokens: 8192 };
+      }
+      // For gemini-3 models, thinking is enabled by default
+    }
 
     const response = await fetch(
       "https://ai.gateway.lovable.dev/v1/chat/completions",
@@ -46,14 +64,7 @@ serve(async (req) => {
           Authorization: `Bearer ${LOVABLE_API_KEY}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          model: aiModel,
-          messages: [
-            { role: "system", content: systemContent },
-            ...messages,
-          ],
-          stream: true,
-        }),
+        body: JSON.stringify(body),
       }
     );
 
