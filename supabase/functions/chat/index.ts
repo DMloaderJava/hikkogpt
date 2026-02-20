@@ -17,7 +17,7 @@ serve(async (req) => {
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
 
     const modelMap: Record<string, string> = {
-      "HikkoGPT": "google/gemini-3-pro-preview",
+      "HikkoGPT": "google/gemini-3.1-pro-preview",
       "Илья": "google/gemini-3-flash-preview",
       "Арсений": "google/gemini-2.5-flash",
       "Илон Маск": "google/gemini-3-pro-preview",
