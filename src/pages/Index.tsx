@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { Menu, Share, Moon, Sun, LogOut, Brain } from "lucide-react";
 import { ChatSidebar } from "@/components/ChatSidebar";
 import { ChatInput } from "@/components/ChatInput";
@@ -35,6 +35,15 @@ const Index = () => {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [activeChat?.messages]);
+
+  const characters = ["Илон Маск", "Прохожий0"];
+
+  const handleModelSelect = useCallback((model: string) => {
+    setSelectedModel(model);
+    if (characters.includes(model)) {
+      setActiveChatId(null);
+    }
+  }, [setSelectedModel, setActiveChatId]);
 
   const handleSuggestionClick = (text: string) => {
     sendMessage(text);
@@ -74,7 +83,7 @@ const Index = () => {
             >
               <Menu className="h-5 w-5" />
             </button>
-            <ModelSelector selectedModel={selectedModel} onSelect={setSelectedModel} />
+            <ModelSelector selectedModel={selectedModel} onSelect={handleModelSelect} />
           </div>
 
           <div className="flex items-center gap-1">
