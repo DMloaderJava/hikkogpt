@@ -193,9 +193,22 @@ export function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
             }
           >
             <div className="text-[15px] leading-relaxed whitespace-pre-wrap break-words">
-              {renderContent(message.content)}
-              {isStreaming && !isUser && (
-                <span className="inline-block w-1.5 h-5 bg-foreground ml-0.5 animate-blink" />
+              {isStreaming && !isUser && !message.content ? (
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <div className="flex gap-1">
+                    <span className="h-2 w-2 rounded-full bg-muted-foreground animate-bounce [animation-delay:0ms]" />
+                    <span className="h-2 w-2 rounded-full bg-muted-foreground animate-bounce [animation-delay:150ms]" />
+                    <span className="h-2 w-2 rounded-full bg-muted-foreground animate-bounce [animation-delay:300ms]" />
+                  </div>
+                  <span className="text-sm">Подождите...</span>
+                </div>
+              ) : (
+                <>
+                  {renderContent(message.content)}
+                  {isStreaming && !isUser && (
+                    <span className="inline-block w-1.5 h-5 bg-foreground ml-0.5 animate-blink" />
+                  )}
+                </>
               )}
             </div>
           </div>
