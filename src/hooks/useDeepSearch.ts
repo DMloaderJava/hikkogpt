@@ -3,7 +3,15 @@ import { toast } from "sonner";
 
 const DEEPSEARCH_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/deepsearch`;
 
-export type DeepSearchPhase = "idle" | "clarifying" | "waiting_answers" | "searching" | "done" | "error";
+export type DeepSearchPhase =
+  | "idle"
+  | "clarifying"
+  | "waiting_answers"
+  | "generating_queries"
+  | "searching"
+  | "analyzing"
+  | "done"
+  | "error";
 
 export interface DeepSearchState {
   phase: DeepSearchPhase;
@@ -58,7 +66,7 @@ export function useDeepSearch() {
         ...prev,
         phase: "waiting_answers",
         questions: data.questions || [],
-        statusMessage: "",
+        statusMessage: "Ожидаю ответы на вопросы...",
       }));
     } catch (e) {
       console.error("Clarify error:", e);
@@ -70,8 +78,8 @@ export function useDeepSearch() {
   const startSearch = useCallback(async (query: string, answers: string) => {
     setState((prev) => ({
       ...prev,
-      phase: "searching",
-      statusMessage: "Начинаю глубокий поиск...",
+      phase: "generating_queries",
+      statusMessage: "Генерирую поисковые запросы...",
       report: "",
       sources: [],
     }));
@@ -117,9 +125,22 @@ export function useDeepSearch() {
             const event = parsed.event;
 
             if (event === "status") {
-              setState((prev) => ({ ...prev, statusMessage: parsed.message }));
+              // Map status messages to phases
+              const msg: string = parsed.message || "";
+              let newPhase: DeepSearchPhase = state.phase;
+              if (msg.includes("поисковые запросы") || msg.includes("Создано")) {
+                newPhase = "generating_queries";
+              } else if (msg.includes("Ищу информацию") || msg.includes("Фильтрую")) {
+                newPhase = "searching";
+              } else if (msg.includes("Анализирую")) {
+                newPhase = "analyzing";
+              } else if (msg.includes("Формирую отчёт")) {
+                newPhase = "analyzing";
+              }
+              setState((prev) => ({ ...prev, phase: newPhase, statusMessage: msg }));
             } else if (event === "delta") {
-              setState((prev) => ({ ...prev, report: prev.report + parsed.content }));
+              // Once we get deltas, we're in analyzing/report phase
+              setState((prev) => ({ ...prev, phase: "analyzing", report: prev.report + parsed.content }));
             } else if (event === "sources") {
               setState((prev) => ({ ...prev, sources: parsed.sources || [] }));
             } else if (event === "error") {
@@ -130,7 +151,7 @@ export function useDeepSearch() {
         }
       }
 
-      setState((prev) => ({ ...prev, phase: "done", used: true, statusMessage: "" }));
+      setState((prev) => ({ ...prev, phase: "done", used: true, statusMessage: "Отчёт готов" }));
     } catch (e) {
       if (e instanceof DOMException && e.name === "AbortError") return;
       console.error("Search error:", e);
@@ -143,7 +164,7 @@ export function useDeepSearch() {
 
   const stopSearch = useCallback(() => {
     abortRef.current?.abort();
-    setState((prev) => ({ ...prev, phase: "done", used: true }));
+    setState((prev) => ({ ...prev, phase: "done", used: true, statusMessage: "" }));
   }, []);
 
   return {
