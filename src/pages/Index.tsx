@@ -83,16 +83,6 @@ const Index = () => {
     }
   }, [deepSearch.phase, deepSearch.used, startClarify, sendMessage]);
 
-  // When clarifying questions arrive, inject them as assistant message
-  useEffect(() => {
-    if (deepSearch.phase === "waiting_answers" && deepSearch.questions.length > 0) {
-      const questionsText = deepSearch.questions
-        .map((q, i) => `${i + 1}. ${q}`)
-        .join("\n");
-      sendMessage(""); // dummy - we'll inject directly
-      // Actually let's add the questions as a fake send
-    }
-  }, [deepSearch.phase]); // intentionally minimal deps
 
   // Handle answers to clarifying questions
   const handleSendWithDeepSearchCheck = useCallback(
@@ -114,7 +104,7 @@ const Index = () => {
   const displayMessages = [...messages];
 
   // Inject clarifying questions as assistant message if in waiting_answers phase
-  if (deepSearch.phase === "waiting_answers" && deepSearch.questions.length > 0) {
+  if ((deepSearch.phase === "waiting_answers" || (deepSearch.questions.length > 0 && deepSearch.phase !== "idle")) && deepSearch.questions.length > 0) {
     const questionsText = `Прежде чем начать глубокий поиск, мне нужно уточнить несколько моментов:\n\n${deepSearch.questions.map((q, i) => `**${i + 1}.** ${q}`).join("\n\n")}\n\nОтветьте на эти вопросы, и я начну поиск.`;
     displayMessages.push({
       id: "deepsearch-questions",
@@ -137,7 +127,7 @@ const Index = () => {
     });
   }
 
-  const isDeepSearchActive = deepSearch.phase === "searching" || deepSearch.phase === "clarifying";
+  const isDeepSearchActive = deepSearch.phase === "searching" || deepSearch.phase === "clarifying" || deepSearch.phase === "generating_queries" || deepSearch.phase === "analyzing";
 
   return (
     <div className="flex h-screen w-full overflow-hidden">
