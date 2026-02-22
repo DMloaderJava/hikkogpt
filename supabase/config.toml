@@ -2,3 +2,6 @@ project_id = "xnhtuhvcrozgzcytnnco"
 
 [functions.chat]
 verify_jwt = false
+
+[functions.deepsearch]
+verify_jwt = false

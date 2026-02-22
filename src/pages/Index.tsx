@@ -5,7 +5,9 @@ import { ChatInput } from "@/components/ChatInput";
 import { MessageBubble } from "@/components/MessageBubble";
 import { EmptyState } from "@/components/EmptyState";
 import { ModelSelector } from "@/components/ModelSelector";
+import { DeepSearchPanel } from "@/components/DeepSearchPanel";
 import { useChat } from "@/hooks/useChat";
+import { useDeepSearch } from "@/hooks/useDeepSearch";
 import { useTheme } from "@/hooks/useTheme";
 import { useAuth } from "@/hooks/useAuth";
 
@@ -27,14 +29,34 @@ const Index = () => {
     stopStreaming,
   } = useChat();
 
+  const {
+    deepSearch,
+    startClarify,
+    startSearch,
+    stopSearch,
+    resetDeepSearch,
+    resetDeepSearchForNewChat,
+  } = useDeepSearch();
+
   const { isDark, toggle: toggleTheme } = useTheme();
   const { user, signOut } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [deepSearchQuery, setDeepSearchQuery] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [activeChat?.messages]);
+  }, [activeChat?.messages, deepSearch.report]);
+
+  // Reset deep search state when switching chats
+  const prevChatIdRef = useRef(activeChatId);
+  useEffect(() => {
+    if (prevChatIdRef.current !== activeChatId) {
+      resetDeepSearchForNewChat();
+      setDeepSearchQuery("");
+      prevChatIdRef.current = activeChatId;
+    }
+  }, [activeChatId, resetDeepSearchForNewChat]);
 
   const characters = ["Илон Маск", "Прохожий0"];
 
@@ -49,7 +71,73 @@ const Index = () => {
     sendMessage(text);
   };
 
+  const handleDeepSearch = useCallback(async (query: string) => {
+    if (deepSearch.used) return;
+
+    if (deepSearch.phase === "idle") {
+      // First time: ask clarifying questions
+      setDeepSearchQuery(query);
+      // Add the user query as a message first
+      await sendMessage(`🔍 **Глубокий поиск:** ${query}`);
+      await startClarify(query);
+    }
+  }, [deepSearch.phase, deepSearch.used, startClarify, sendMessage]);
+
+  // When clarifying questions arrive, inject them as assistant message
+  useEffect(() => {
+    if (deepSearch.phase === "waiting_answers" && deepSearch.questions.length > 0) {
+      const questionsText = deepSearch.questions
+        .map((q, i) => `${i + 1}. ${q}`)
+        .join("\n");
+      sendMessage(""); // dummy - we'll inject directly
+      // Actually let's add the questions as a fake send
+    }
+  }, [deepSearch.phase]); // intentionally minimal deps
+
+  // Handle answers to clarifying questions
+  const handleSendWithDeepSearchCheck = useCallback(
+    async (content: string, imageBase64?: string) => {
+      if (deepSearch.phase === "waiting_answers" && content.trim()) {
+        // User is answering clarifying questions - start the search
+        await sendMessage(content, imageBase64);
+        startSearch(deepSearchQuery, content);
+        return;
+      }
+      sendMessage(content, imageBase64);
+    },
+    [deepSearch.phase, deepSearchQuery, sendMessage, startSearch]
+  );
+
   const messages = activeChat?.messages || [];
+
+  // Build displayed messages including deep search injections
+  const displayMessages = [...messages];
+
+  // Inject clarifying questions as assistant message if in waiting_answers phase
+  if (deepSearch.phase === "waiting_answers" && deepSearch.questions.length > 0) {
+    const questionsText = `Прежде чем начать глубокий поиск, мне нужно уточнить несколько моментов:\n\n${deepSearch.questions.map((q, i) => `**${i + 1}.** ${q}`).join("\n\n")}\n\nОтветьте на эти вопросы, и я начну поиск.`;
+    displayMessages.push({
+      id: "deepsearch-questions",
+      role: "assistant",
+      content: questionsText,
+      timestamp: new Date(),
+    });
+  }
+
+  // Inject deep search report
+  if (deepSearch.report) {
+    const sourcesText = deepSearch.sources.length > 0
+      ? `\n\n---\n\n**Источники:**\n${deepSearch.sources.map((s) => `${s.index}. [${s.title}](${s.url})`).join("\n")}`
+      : "";
+    displayMessages.push({
+      id: "deepsearch-report",
+      role: "assistant",
+      content: deepSearch.report + sourcesText,
+      timestamp: new Date(),
+    });
+  }
+
+  const isDeepSearchActive = deepSearch.phase === "searching" || deepSearch.phase === "clarifying";
 
   return (
     <div className="flex h-screen w-full overflow-hidden">
@@ -119,16 +207,19 @@ const Index = () => {
 
         {/* Chat content */}
         <div className="flex flex-1 flex-col overflow-hidden">
-          {messages.length === 0 ? (
+          {displayMessages.length === 0 ? (
             <EmptyState onSuggestionClick={handleSuggestionClick} />
           ) : (
             <div className="flex-1 overflow-y-auto px-4 scrollbar-thin">
               <div className="mx-auto max-w-3xl">
-                {messages.map((msg, i) => (
+                {displayMessages.map((msg, i) => (
                   <MessageBubble
                     key={msg.id}
                     message={msg}
-                    isStreaming={isStreaming && i === messages.length - 1 && msg.role === "assistant"}
+                    isStreaming={
+                      (isStreaming && i === displayMessages.length - 1 && msg.role === "assistant") ||
+                      (msg.id === "deepsearch-report" && deepSearch.phase === "searching")
+                    }
                   />
                 ))}
                 <div ref={messagesEndRef} />
@@ -136,8 +227,16 @@ const Index = () => {
             </div>
           )}
 
+          <DeepSearchPanel deepSearch={deepSearch} />
+
           {/* Input */}
-          <ChatInput onSend={sendMessage} isStreaming={isStreaming} onStop={stopStreaming} />
+          <ChatInput
+            onSend={handleSendWithDeepSearchCheck}
+            isStreaming={isStreaming || isDeepSearchActive}
+            onStop={isDeepSearchActive ? stopSearch : stopStreaming}
+            deepSearchUsed={deepSearch.used}
+            onDeepSearch={handleDeepSearch}
+          />
         </div>
       </div>
 
