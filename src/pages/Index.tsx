@@ -203,14 +203,15 @@ const Index = () => {
             <div className="flex-1 overflow-y-auto px-4 scrollbar-thin">
               <div className="mx-auto max-w-3xl">
                 {displayMessages.map((msg, i) => (
-                  <MessageBubble
-                    key={msg.id}
-                    message={msg}
-                    isStreaming={
-                      (isStreaming && i === displayMessages.length - 1 && msg.role === "assistant") ||
-                      (msg.id === "deepsearch-report" && deepSearch.phase === "searching")
-                    }
-                  />
+                  <div key={msg.id} className="group">
+                    <MessageBubble
+                      message={msg}
+                      isStreaming={
+                        (isStreaming && i === displayMessages.length - 1 && msg.role === "assistant") ||
+                        (msg.id === "deepsearch-report" && deepSearch.phase === "searching")
+                      }
+                    />
+                  </div>
                 ))}
                 <div ref={messagesEndRef} />
               </div>

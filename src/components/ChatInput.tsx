@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
-import { ArrowUp, Square, X, Image, Search } from "lucide-react";
+import { ArrowUp, Square, X, Image, Search, Mic, MicOff, Volume2 } from "lucide-react";
+import { useVoice } from "@/hooks/useVoice";
 
 interface ChatInputProps {
   onSend: (message: string, imageBase64?: string) => void;
@@ -16,6 +17,13 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
   const [deepSearchMode, setDeepSearchMode] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const { state: voiceState, supported: voiceSupported, toggle: toggleVoice } = useVoice({
+    onTranscript: (text) => {
+      setValue((prev) => prev ? `${prev} ${text}` : text);
+      textareaRef.current?.focus();
+    },
+  });
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -69,6 +77,8 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
     setDeepSearchMode(!deepSearchMode);
   };
 
+  const isListening = voiceState === "listening";
+
   return (
     <div className="mx-auto w-full max-w-3xl px-4 pb-4">
       {imagePreview && (
@@ -83,49 +93,86 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
       )}
 
       {deepSearchMode && (
-        <div className="mb-2 flex items-center gap-2 rounded-lg bg-primary/10 px-3 py-1.5 text-sm text-primary">
-          <Search className="h-4 w-4" />
+        <div className="mb-2 flex items-center gap-2 rounded-xl bg-primary/10 px-3 py-1.5 text-sm text-primary">
+          <Search className="h-4 w-4 flex-shrink-0" />
           <span>Режим глубокого поиска</span>
-          <button onClick={() => setDeepSearchMode(false)} className="ml-auto">
+          <button onClick={() => setDeepSearchMode(false)} className="ml-auto flex-shrink-0">
             <X className="h-3.5 w-3.5" />
           </button>
         </div>
       )}
 
-      <div className="relative flex items-end rounded-2xl border border-border bg-secondary/50 shadow-sm transition-colors focus-within:border-ring/50">
+      {isListening && (
+        <div className="mb-2 flex items-center gap-2 rounded-xl bg-destructive/10 px-3 py-1.5 text-sm text-destructive">
+          <span className="relative flex h-2 w-2">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-destructive opacity-75" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-destructive" />
+          </span>
+          Слушаю...
+        </div>
+      )}
+
+      <div className="relative flex items-end rounded-2xl border border-border bg-secondary/50 shadow-sm transition-all duration-200 focus-within:border-ring/50 focus-within:shadow-md">
         <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileSelect} />
 
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          className="flex-shrink-0 p-3 text-muted-foreground hover:text-foreground transition-colors"
-          title="Прикрепить изображение"
-        >
-          <Image className="h-5 w-5" />
-        </button>
-
-        {deepSearchEnabled && (
+        {/* Left buttons */}
+        <div className="flex items-center pl-1">
           <button
-            onClick={toggleDeepSearch}
-            disabled={deepSearchUsed}
-            className={`flex-shrink-0 p-3 transition-colors ${
-              deepSearchUsed
-                ? "text-muted-foreground/40 cursor-not-allowed"
-                : deepSearchMode
-                ? "text-primary"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-            title={deepSearchUsed ? "Лимит глубокого поиска исчерпан" : "Глубокий поиск"}
+            onClick={() => fileInputRef.current?.click()}
+            className="flex-shrink-0 rounded-lg p-2.5 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+            title="Прикрепить изображение"
           >
-            <Search className="h-5 w-5" />
+            <Image className="h-4.5 w-4.5" style={{ width: "18px", height: "18px" }} />
           </button>
-        )}
+
+          {deepSearchEnabled && (
+            <button
+              onClick={toggleDeepSearch}
+              disabled={deepSearchUsed}
+              className={`flex-shrink-0 rounded-lg p-2.5 transition-colors ${
+                deepSearchUsed
+                  ? "text-muted-foreground/30 cursor-not-allowed"
+                  : deepSearchMode
+                  ? "text-primary bg-primary/10"
+                  : "text-muted-foreground hover:bg-accent hover:text-foreground"
+              }`}
+              title={deepSearchUsed ? "Лимит глубокого поиска исчерпан" : "Глубокий поиск"}
+            >
+              <Search style={{ width: "18px", height: "18px" }} />
+            </button>
+          )}
+
+          {voiceSupported && (
+            <button
+              onClick={toggleVoice}
+              className={`flex-shrink-0 rounded-lg p-2.5 transition-colors ${
+                isListening
+                  ? "text-destructive bg-destructive/10"
+                  : "text-muted-foreground hover:bg-accent hover:text-foreground"
+              }`}
+              title={isListening ? "Остановить запись" : "Голосовой ввод"}
+            >
+              {isListening ? (
+                <MicOff style={{ width: "18px", height: "18px" }} />
+              ) : (
+                <Mic style={{ width: "18px", height: "18px" }} />
+              )}
+            </button>
+          )}
+        </div>
 
         <textarea
           ref={textareaRef}
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={deepSearchMode ? "Введите запрос для глубокого поиска..." : "Напишите сообщение..."}
+          placeholder={
+            isListening
+              ? "Говорите..."
+              : deepSearchMode
+              ? "Введите запрос для глубокого поиска..."
+              : "Напишите сообщение..."
+          }
           rows={1}
           className="flex-1 resize-none bg-transparent py-3 pr-2 text-[15px] text-foreground placeholder:text-muted-foreground focus:outline-none"
         />
@@ -133,11 +180,11 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
         <button
           onClick={handleSubmit}
           disabled={!isStreaming && !value.trim() && !imagePreview}
-          className={`m-2 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg transition-colors ${
+          className={`m-2 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg transition-all ${
             isStreaming
               ? "bg-foreground text-background"
               : value.trim() || imagePreview
-              ? "bg-foreground text-background hover:opacity-80"
+              ? "bg-foreground text-background hover:opacity-80 scale-100"
               : "bg-muted text-muted-foreground cursor-not-allowed"
           }`}
         >
@@ -146,7 +193,7 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
       </div>
 
       <p className="mt-2 text-center text-xs text-muted-foreground">
-        ChatGPT может допускать ошибки. Проверяйте важную информацию.
+        HikkoGPT может допускать ошибки. Проверяйте важную информацию.
       </p>
     </div>
   );
