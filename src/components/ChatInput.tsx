@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { ArrowUp, Square, X, Image, Search, Mic, MicOff, Volume2 } from "lucide-react";
+import { ArrowUp, Square, X, Image, Search, Mic, MicOff, Loader2 } from "lucide-react";
 import { useVoice } from "@/hooks/useVoice";
 
 interface ChatInputProps {
@@ -78,6 +78,7 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
   };
 
   const isListening = voiceState === "listening";
+  const isProcessing = voiceState === "processing";
 
   return (
     <div className="mx-auto w-full max-w-3xl px-4 pb-4">
@@ -108,7 +109,14 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-destructive opacity-75" />
             <span className="relative inline-flex h-2 w-2 rounded-full bg-destructive" />
           </span>
-          Слушаю...
+          Слушаю... (нажмите ещё раз, чтобы остановить)
+        </div>
+      )}
+
+      {isProcessing && (
+        <div className="mb-2 flex items-center gap-2 rounded-xl bg-muted px-3 py-1.5 text-sm text-muted-foreground">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          Распознаю речь...
         </div>
       )}
 
@@ -145,14 +153,19 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
           {voiceSupported && (
             <button
               onClick={toggleVoice}
+              disabled={isProcessing}
               className={`flex-shrink-0 rounded-lg p-2.5 transition-colors ${
                 isListening
                   ? "text-destructive bg-destructive/10"
+                  : isProcessing
+                  ? "text-muted-foreground/40 cursor-not-allowed"
                   : "text-muted-foreground hover:bg-accent hover:text-foreground"
               }`}
-              title={isListening ? "Остановить запись" : "Голосовой ввод"}
+              title={isListening ? "Остановить запись" : isProcessing ? "Обработка..." : "Голосовой ввод (ElevenLabs)"}
             >
-              {isListening ? (
+              {isProcessing ? (
+                <Loader2 style={{ width: "18px", height: "18px" }} className="animate-spin" />
+              ) : isListening ? (
                 <MicOff style={{ width: "18px", height: "18px" }} />
               ) : (
                 <Mic style={{ width: "18px", height: "18px" }} />

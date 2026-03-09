@@ -23,8 +23,8 @@ function AppRoutes() {
 
   return (
     <Routes>
-      <Route path="/" element={user ? <Index /> : <Navigate to="/auth" replace />} />
-      <Route path="/auth" element={user ? <Navigate to="/" replace /> : <Auth />} />
+      <Route path="/" element={<Index />} />
+      <Route path="/auth" element={<Auth />} />
       <Route path="*" element={<NotFound />} />
     </Routes>
   );

@@ -1,61 +1,123 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 
-export type VoiceState = "idle" | "listening" | "speaking";
+export type VoiceState = "idle" | "listening" | "processing" | "speaking";
 
 interface UseVoiceOptions {
   onTranscript?: (text: string) => void;
   lang?: string;
 }
 
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
 export function useVoice({ onTranscript, lang = "ru-RU" }: UseVoiceOptions = {}) {
   const [state, setState] = useState<VoiceState>("idle");
   const [supported, setSupported] = useState(false);
-  const recognitionRef = useRef<any>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
   const synthRef = useRef<SpeechSynthesis | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
 
   useEffect(() => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    const hasMedia = !!(navigator.mediaDevices?.getUserMedia);
     const hasSynth = "speechSynthesis" in window;
-    setSupported(!!SpeechRecognition && hasSynth);
+    setSupported(hasMedia);
     if (hasSynth) synthRef.current = window.speechSynthesis;
   }, []);
 
-  const startListening = useCallback(() => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) return;
+  const startListening = useCallback(async () => {
+    try {
+      // Stop any ongoing TTS
+      if (synthRef.current?.speaking) {
+        synthRef.current.cancel();
+      }
 
-    // Stop any ongoing TTS
-    if (synthRef.current?.speaking) {
-      synthRef.current.cancel();
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      chunksRef.current = [];
+
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : MediaRecorder.isTypeSupported("audio/webm")
+        ? "audio/webm"
+        : "audio/ogg";
+
+      const recorder = new MediaRecorder(stream, { mimeType });
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+
+      recorder.onstop = async () => {
+        setState("processing");
+        // Stop stream tracks
+        stream.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+
+        const audioBlob = new Blob(chunksRef.current, { type: mimeType });
+        chunksRef.current = [];
+
+        try {
+          const formData = new FormData();
+          formData.append("audio", audioBlob, "audio.webm");
+          // Map browser language code to ISO 639-3 for ElevenLabs
+          const langMap: Record<string, string> = {
+            "ru-RU": "rus",
+            "en-US": "eng",
+            "en-GB": "eng",
+            "uk-UA": "ukr",
+          };
+          formData.append("language", langMap[lang] || "rus");
+
+          const response = await fetch(
+            `${SUPABASE_URL}/functions/v1/elevenlabs-stt`,
+            {
+              method: "POST",
+              headers: {
+                apikey: SUPABASE_ANON_KEY,
+                Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+              },
+              body: formData,
+            }
+          );
+
+          if (!response.ok) throw new Error(`STT request failed: ${response.status}`);
+
+          const data = await response.json();
+          if (data.text) {
+            onTranscript?.(data.text);
+          }
+        } catch (err) {
+          console.error("STT transcription error:", err);
+        } finally {
+          setState("idle");
+        }
+      };
+
+      recorder.start();
+      setState("listening");
+    } catch (err) {
+      console.error("Microphone access error:", err);
+      setState("idle");
     }
-
-    const recognition = new SpeechRecognition();
-    recognition.lang = lang;
-    recognition.continuous = false;
-    recognition.interimResults = false;
-
-    recognition.onstart = () => setState("listening");
-    recognition.onresult = (e: any) => {
-      const transcript = e.results[0][0].transcript;
-      onTranscript?.(transcript);
-    };
-    recognition.onerror = () => setState("idle");
-    recognition.onend = () => setState("idle");
-
-    recognitionRef.current = recognition;
-    recognition.start();
   }, [lang, onTranscript]);
 
   const stopListening = useCallback(() => {
-    recognitionRef.current?.stop();
-    setState("idle");
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
+      mediaRecorderRef.current.stop();
+    } else {
+      // Clean up stream if recorder not started properly
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+      setState("idle");
+    }
   }, []);
 
   const speak = useCallback((text: string) => {
     if (!synthRef.current) return;
     synthRef.current.cancel();
 
-    // Clean markdown from text
     const clean = text
       .replace(/```[\s\S]*?```/g, "код")
       .replace(/`[^`]+`/g, "")
@@ -92,9 +154,10 @@ export function useVoice({ onTranscript, lang = "ru-RU" }: UseVoiceOptions = {})
       stopListening();
     } else if (state === "speaking") {
       stopSpeaking();
-    } else {
+    } else if (state === "idle") {
       startListening();
     }
+    // "processing" state — do nothing, wait
   }, [state, startListening, stopListening, stopSpeaking]);
 
   return { state, supported, toggle, startListening, stopListening, speak, stopSpeaking };
