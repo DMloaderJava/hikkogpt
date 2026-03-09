@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { ArrowUp, Square, X, Image, Search, Mic, MicOff, Volume2 } from "lucide-react";
+import { ArrowUp, Square, X, Image, Search, Mic, MicOff, Loader2 } from "lucide-react";
 import { useVoice } from "@/hooks/useVoice";
 
 interface ChatInputProps {
