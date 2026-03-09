@@ -153,14 +153,19 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
           {voiceSupported && (
             <button
               onClick={toggleVoice}
+              disabled={isProcessing}
               className={`flex-shrink-0 rounded-lg p-2.5 transition-colors ${
                 isListening
                   ? "text-destructive bg-destructive/10"
+                  : isProcessing
+                  ? "text-muted-foreground/40 cursor-not-allowed"
                   : "text-muted-foreground hover:bg-accent hover:text-foreground"
               }`}
-              title={isListening ? "Остановить запись" : "Голосовой ввод"}
+              title={isListening ? "Остановить запись" : isProcessing ? "Обработка..." : "Голосовой ввод (ElevenLabs)"}
             >
-              {isListening ? (
+              {isProcessing ? (
+                <Loader2 style={{ width: "18px", height: "18px" }} className="animate-spin" />
+              ) : isListening ? (
                 <MicOff style={{ width: "18px", height: "18px" }} />
               ) : (
                 <Mic style={{ width: "18px", height: "18px" }} />
