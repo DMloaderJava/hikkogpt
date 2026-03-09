@@ -13,27 +13,27 @@ const suggestions = [
 
 export function EmptyState({ onSuggestionClick }: EmptyStateProps) {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center px-4 py-8">
-      <div className="mb-6 flex h-16 w-16 items-center justify-center rounded-2xl bg-primary shadow-sm">
-        <Sparkles className="h-8 w-8 text-primary-foreground" />
+    <div className="flex flex-1 flex-col items-center justify-center px-4 py-6 sm:py-8">
+      <div className="mb-4 sm:mb-6 flex h-14 w-14 sm:h-16 sm:w-16 items-center justify-center rounded-2xl bg-primary shadow-sm">
+        <Sparkles className="h-7 w-7 sm:h-8 sm:w-8 text-primary-foreground" />
       </div>
 
-      <h1 className="mb-2 text-2xl font-bold text-foreground">
+      <h1 className="mb-2 text-xl sm:text-2xl font-bold text-foreground">
         Чем могу помочь?
       </h1>
-      <p className="mb-8 text-sm text-muted-foreground">Задайте любой вопрос или выберите идею ниже</p>
+      <p className="mb-6 sm:mb-8 text-sm text-muted-foreground text-center">Задайте любой вопрос или выберите идею ниже</p>
 
       <div className="grid w-full max-w-2xl grid-cols-1 gap-2 sm:grid-cols-2">
         {suggestions.map((s) => (
           <button
             key={s.label}
             onClick={() => onSuggestionClick(s.text)}
-            className="group flex items-start gap-3 rounded-xl border border-border bg-card p-4 text-left transition-all hover:bg-secondary/80 hover:border-border/50 hover:shadow-sm active:scale-[0.98]"
+            className="group flex items-start gap-3 rounded-xl border border-border bg-card p-3 sm:p-4 text-left transition-all hover:bg-secondary/80 hover:border-border/50 hover:shadow-sm active:scale-[0.98]"
           >
             <div className="mt-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-secondary group-hover:bg-background transition-colors">
               <s.icon className={`h-4 w-4 ${s.color}`} />
             </div>
-            <div>
+            <div className="min-w-0">
               <p className="text-sm font-semibold text-foreground">{s.label}</p>
               <p className="mt-0.5 text-xs text-muted-foreground line-clamp-2">{s.text}</p>
             </div>

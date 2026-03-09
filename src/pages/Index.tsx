@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Menu, Share, Moon, Sun, LogOut, Brain } from "lucide-react";
+import { Menu, Share, Moon, Sun, LogOut, Brain, X } from "lucide-react";
 import { ChatSidebar } from "@/components/ChatSidebar";
 import { ChatInput } from "@/components/ChatInput";
 import { MessageBubble } from "@/components/MessageBubble";
@@ -10,6 +10,7 @@ import { useChat } from "@/hooks/useChat";
 import { useDeepSearch } from "@/hooks/useDeepSearch";
 import { useTheme } from "@/hooks/useTheme";
 import { useAuth } from "@/hooks/useAuth";
+import { useIsMobile } from "@/hooks/use-mobile";
 
 const Index = () => {
   const {
@@ -40,9 +41,19 @@ const Index = () => {
 
   const { isDark, toggle: toggleTheme } = useTheme();
   const { user, signOut } = useAuth();
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const isMobile = useIsMobile();
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [deepSearchQuery, setDeepSearchQuery] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // On desktop, sidebar is open by default
+  useEffect(() => {
+    if (!isMobile) {
+      setSidebarOpen(true);
+    } else {
+      setSidebarOpen(false);
+    }
+  }, [isMobile]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -75,20 +86,15 @@ const Index = () => {
     if (deepSearch.used) return;
 
     if (deepSearch.phase === "idle") {
-      // First time: ask clarifying questions
       setDeepSearchQuery(query);
-      // Add the user query as a message first
       await sendMessage(`🔍 **Глубокий поиск:** ${query}`);
       await startClarify(query);
     }
   }, [deepSearch.phase, deepSearch.used, startClarify, sendMessage]);
 
-
-  // Handle answers to clarifying questions
   const handleSendWithDeepSearchCheck = useCallback(
     async (content: string, imageBase64?: string) => {
       if (deepSearch.phase === "waiting_answers" && content.trim()) {
-        // User is answering clarifying questions - start the search
         await sendMessage(content, imageBase64);
         startSearch(deepSearchQuery, content);
         return;
@@ -98,12 +104,21 @@ const Index = () => {
     [deepSearch.phase, deepSearchQuery, sendMessage, startSearch]
   );
 
+  // Close sidebar on mobile when selecting a chat
+  const handleSelectChat = useCallback((id: string) => {
+    setActiveChatId(id);
+    if (isMobile) setSidebarOpen(false);
+  }, [setActiveChatId, isMobile]);
+
+  const handleNewChat = useCallback(() => {
+    createNewChat();
+    if (isMobile) setSidebarOpen(false);
+  }, [createNewChat, isMobile]);
+
   const messages = activeChat?.messages || [];
 
-  // Build displayed messages including deep search injections
   const displayMessages = [...messages];
 
-  // Inject clarifying questions as assistant message if in waiting_answers phase
   if ((deepSearch.phase === "waiting_answers" || (deepSearch.questions.length > 0 && deepSearch.phase !== "idle")) && deepSearch.questions.length > 0) {
     const questionsText = `Прежде чем начать глубокий поиск, мне нужно уточнить несколько моментов:\n\n${deepSearch.questions.map((q, i) => `**${i + 1}.** ${q}`).join("\n\n")}\n\nОтветьте на эти вопросы, и я начну поиск.`;
     displayMessages.push({
@@ -114,7 +129,6 @@ const Index = () => {
     });
   }
 
-  // Inject deep search report
   if (deepSearch.report) {
     const sourcesText = deepSearch.sources.length > 0
       ? `\n\n---\n\n**Источники:**\n${deepSearch.sources.map((s) => `${s.index}. [${s.title}](${s.url})`).join("\n")}`
@@ -131,19 +145,39 @@ const Index = () => {
 
   return (
     <div className="flex h-screen w-full overflow-hidden">
+      {/* Mobile sidebar overlay */}
+      {isMobile && sidebarOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-background/60 backdrop-blur-sm"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
       {/* Sidebar */}
       <div
-        className={`flex-shrink-0 transition-all duration-300 ${
-          sidebarOpen ? "w-64" : "w-0"
-        } overflow-hidden border-r border-sidebar-border`}
+        className={`
+          flex-shrink-0 transition-all duration-300 border-r border-sidebar-border
+          ${isMobile
+            ? `fixed inset-y-0 left-0 z-50 w-72 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"} transition-transform`
+            : `${sidebarOpen ? "w-64" : "w-0"} overflow-hidden`
+          }
+        `}
       >
-        <div className="h-full w-64">
+        <div className={isMobile ? "h-full w-72" : "h-full w-64"}>
+          {isMobile && sidebarOpen && (
+            <button
+              onClick={() => setSidebarOpen(false)}
+              className="absolute right-3 top-3 z-10 rounded-lg p-1.5 text-muted-foreground hover:bg-sidebar-accent transition-colors"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
           <ChatSidebar
             chats={chats}
             activeChatId={activeChatId}
             userEmail={user?.email}
-            onNewChat={createNewChat}
-            onSelectChat={setActiveChatId}
+            onNewChat={handleNewChat}
+            onSelectChat={handleSelectChat}
             onDeleteChat={deleteChat}
             onRenameChat={renameChat}
           />
@@ -153,18 +187,20 @@ const Index = () => {
       {/* Main area */}
       <div className="flex flex-1 flex-col min-w-0">
         {/* Header */}
-        <header className="flex items-center justify-between border-b border-border px-4 py-2">
-          <div className="flex items-center gap-2">
+        <header className="flex items-center justify-between border-b border-border px-3 py-2 gap-2">
+          <div className="flex items-center gap-1.5 min-w-0">
             <button
               onClick={() => setSidebarOpen(!sidebarOpen)}
-              className="rounded-lg p-2 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+              className="rounded-lg p-2 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors flex-shrink-0"
             >
               <Menu className="h-5 w-5" />
             </button>
-            <ModelSelector selectedModel={selectedModel} onSelect={handleModelSelect} />
+            <div className="min-w-0 overflow-hidden">
+              <ModelSelector selectedModel={selectedModel} onSelect={handleModelSelect} />
+            </div>
           </div>
 
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-0.5 flex-shrink-0">
             <button
               onClick={() => setThinkingEnabled(!thinkingEnabled)}
               className={`rounded-lg p-2 transition-colors ${
@@ -182,7 +218,7 @@ const Index = () => {
             >
               {isDark ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
             </button>
-            <button className="rounded-lg p-2 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors">
+            <button className="hidden sm:flex rounded-lg p-2 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors">
               <Share className="h-5 w-5" />
             </button>
             <button
@@ -200,7 +236,7 @@ const Index = () => {
           {displayMessages.length === 0 ? (
             <EmptyState onSuggestionClick={handleSuggestionClick} />
           ) : (
-            <div className="flex-1 overflow-y-auto px-4 scrollbar-thin">
+            <div className="flex-1 overflow-y-auto px-3 sm:px-4 scrollbar-thin">
               <div className="mx-auto max-w-3xl">
                 {displayMessages.map((msg, i) => (
                   <div key={msg.id} className="group">
@@ -230,14 +266,6 @@ const Index = () => {
           />
         </div>
       </div>
-
-      {/* Mobile overlay */}
-      {sidebarOpen && (
-        <div
-          className="fixed inset-0 z-40 bg-background/50 md:hidden"
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
     </div>
   );
 };
