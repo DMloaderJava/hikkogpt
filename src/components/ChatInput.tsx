@@ -29,7 +29,7 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
       textareaRef.current.style.height =
-        Math.min(textareaRef.current.scrollHeight, 200) + "px";
+        Math.min(textareaRef.current.scrollHeight, 160) + "px";
     }
   }, [value]);
 
@@ -81,11 +81,11 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
   const isProcessing = voiceState === "processing";
 
   return (
-    <div className="mx-auto w-full max-w-3xl px-4 pb-4">
+    <div className="mx-auto w-full max-w-3xl px-3 sm:px-4 pb-3 sm:pb-4">
       {imagePreview && (
         <div className="mb-2 flex items-start gap-2">
           <div className="relative">
-            <img src={imagePreview} alt="Preview" className="h-20 w-20 rounded-lg object-cover border border-border" />
+            <img src={imagePreview} alt="Preview" className="h-16 w-16 sm:h-20 sm:w-20 rounded-lg object-cover border border-border" />
             <button onClick={() => setImagePreview(null)} className="absolute -top-1.5 -right-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-destructive text-destructive-foreground text-xs">
               <X className="h-3 w-3" />
             </button>
@@ -96,7 +96,7 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
       {deepSearchMode && (
         <div className="mb-2 flex items-center gap-2 rounded-xl bg-primary/10 px-3 py-1.5 text-sm text-primary">
           <Search className="h-4 w-4 flex-shrink-0" />
-          <span>Режим глубокого поиска</span>
+          <span className="truncate">Режим глубокого поиска</span>
           <button onClick={() => setDeepSearchMode(false)} className="ml-auto flex-shrink-0">
             <X className="h-3.5 w-3.5" />
           </button>
@@ -105,17 +105,17 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
 
       {isListening && (
         <div className="mb-2 flex items-center gap-2 rounded-xl bg-destructive/10 px-3 py-1.5 text-sm text-destructive">
-          <span className="relative flex h-2 w-2">
+          <span className="relative flex h-2 w-2 flex-shrink-0">
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-destructive opacity-75" />
             <span className="relative inline-flex h-2 w-2 rounded-full bg-destructive" />
           </span>
-          Слушаю... (нажмите ещё раз, чтобы остановить)
+          <span className="truncate">Слушаю... (нажмите ещё раз, чтобы остановить)</span>
         </div>
       )}
 
       {isProcessing && (
         <div className="mb-2 flex items-center gap-2 rounded-xl bg-muted px-3 py-1.5 text-sm text-muted-foreground">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          <Loader2 className="h-3.5 w-3.5 animate-spin flex-shrink-0" />
           Распознаю речь...
         </div>
       )}
@@ -127,17 +127,17 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
         <div className="flex items-center pl-1">
           <button
             onClick={() => fileInputRef.current?.click()}
-            className="flex-shrink-0 rounded-lg p-2.5 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+            className="flex-shrink-0 rounded-lg p-2 sm:p-2.5 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
             title="Прикрепить изображение"
           >
-            <Image className="h-4.5 w-4.5" style={{ width: "18px", height: "18px" }} />
+            <Image style={{ width: "18px", height: "18px" }} />
           </button>
 
           {deepSearchEnabled && (
             <button
               onClick={toggleDeepSearch}
               disabled={deepSearchUsed}
-              className={`flex-shrink-0 rounded-lg p-2.5 transition-colors ${
+              className={`flex-shrink-0 rounded-lg p-2 sm:p-2.5 transition-colors ${
                 deepSearchUsed
                   ? "text-muted-foreground/30 cursor-not-allowed"
                   : deepSearchMode
@@ -154,7 +154,7 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
             <button
               onClick={toggleVoice}
               disabled={isProcessing}
-              className={`flex-shrink-0 rounded-lg p-2.5 transition-colors ${
+              className={`flex-shrink-0 rounded-lg p-2 sm:p-2.5 transition-colors ${
                 isListening
                   ? "text-destructive bg-destructive/10"
                   : isProcessing
@@ -183,7 +183,7 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
             isListening
               ? "Говорите..."
               : deepSearchMode
-              ? "Введите запрос для глубокого поиска..."
+              ? "Введите запрос для поиска..."
               : "Напишите сообщение..."
           }
           rows={1}
