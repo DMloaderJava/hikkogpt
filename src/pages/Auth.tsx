@@ -1,9 +1,11 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Sparkles, Loader2, Eye, EyeOff, Mail, Lock } from "lucide-react";
 import { toast } from "sonner";
 
 const Auth = () => {
+  const navigate = useNavigate();
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -18,6 +20,7 @@ const Auth = () => {
       if (isLogin) {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
+        navigate("/");
       } else {
         const { error } = await supabase.auth.signUp({
           email,
@@ -25,7 +28,7 @@ const Auth = () => {
           options: { emailRedirectTo: window.location.origin },
         });
         if (error) throw error;
-        toast.success("Аккаунт создан! Вы вошли автоматически.");
+        toast.success("Аккаунт создан! Проверьте почту для подтверждения.");
       }
     } catch (error: any) {
       const msg = error.message?.includes("Invalid login credentials")
