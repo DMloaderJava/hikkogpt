@@ -20,6 +20,7 @@ const Auth = () => {
       if (isLogin) {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
+        navigate("/");
       } else {
         const { error } = await supabase.auth.signUp({
           email,
@@ -27,7 +28,7 @@ const Auth = () => {
           options: { emailRedirectTo: window.location.origin },
         });
         if (error) throw error;
-        toast.success("Аккаунт создан! Вы вошли автоматически.");
+        toast.success("Аккаунт создан! Проверьте почту для подтверждения.");
       }
     } catch (error: any) {
       const msg = error.message?.includes("Invalid login credentials")
