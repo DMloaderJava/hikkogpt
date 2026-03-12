@@ -81,7 +81,10 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
   const isProcessing = voiceState === "processing";
 
   return (
-    <div className="mx-auto w-full max-w-3xl px-3 sm:px-4 pb-3 sm:pb-4">
+    <div
+      className="mx-auto w-full max-w-3xl px-3 sm:px-4 pb-3 sm:pb-4"
+      style={{ paddingBottom: "max(12px, env(safe-area-inset-bottom, 12px))" }}
+    >
       {imagePreview && (
         <div className="mb-2 flex items-start gap-2">
           <div className="relative">
@@ -161,7 +164,7 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
                   ? "text-muted-foreground/40 cursor-not-allowed"
                   : "text-muted-foreground hover:bg-accent hover:text-foreground"
               }`}
-              title={isListening ? "Остановить запись" : isProcessing ? "Обработка..." : "Голосовой ввод (ElevenLabs)"}
+              title={isListening ? "Остановить запись" : isProcessing ? "Обработка..." : "Голосовой ввод"}
             >
               {isProcessing ? (
                 <Loader2 style={{ width: "18px", height: "18px" }} className="animate-spin" />

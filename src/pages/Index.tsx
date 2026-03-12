@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Menu, Share, Moon, Sun, LogOut, Brain, X } from "lucide-react";
+import { Menu, Share, Moon, Sun, LogOut, Brain, X, SquarePen } from "lucide-react";
 import { ChatSidebar } from "@/components/ChatSidebar";
 import { ChatInput } from "@/components/ChatInput";
 import { MessageBubble } from "@/components/MessageBubble";
@@ -158,12 +158,12 @@ const Index = () => {
         className={`
           flex-shrink-0 transition-all duration-300 border-r border-sidebar-border
           ${isMobile
-            ? `fixed inset-y-0 left-0 z-50 w-72 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"} transition-transform`
+            ? `fixed inset-y-0 left-0 z-50 ${sidebarOpen ? "translate-x-0 w-[85vw] max-w-sm" : "-translate-x-full w-[85vw] max-w-sm"} transition-transform`
             : `${sidebarOpen ? "w-64" : "w-0"} overflow-hidden`
           }
         `}
       >
-        <div className={isMobile ? "h-full w-72" : "h-full w-64"}>
+        <div className={isMobile ? "h-full" : "h-full w-64"}>
           {isMobile && sidebarOpen && (
             <button
               onClick={() => setSidebarOpen(false)}
@@ -185,58 +185,98 @@ const Index = () => {
       </div>
 
       {/* Main area */}
-      <div className="flex flex-1 flex-col min-w-0">
-        {/* Header */}
-        <header className="flex items-center justify-between border-b border-border px-3 py-2 gap-2">
-          <div className="flex items-center gap-1.5 min-w-0">
+      <div className="flex flex-1 flex-col min-w-0 relative">
+
+        {/* Desktop header */}
+        {!isMobile && (
+          <header className="flex items-center justify-between border-b border-border px-3 py-2 gap-2">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <button
+                onClick={() => setSidebarOpen(!sidebarOpen)}
+                className="rounded-lg p-2 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors flex-shrink-0"
+              >
+                <Menu className="h-5 w-5" />
+              </button>
+              <div className="min-w-0 overflow-hidden">
+                <ModelSelector selectedModel={selectedModel} onSelect={handleModelSelect} />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-0.5 flex-shrink-0">
+              <button
+                onClick={() => setThinkingEnabled(!thinkingEnabled)}
+                className={`rounded-lg p-2 transition-colors ${
+                  thinkingEnabled
+                    ? "bg-primary/10 text-primary"
+                    : "text-muted-foreground hover:bg-secondary hover:text-foreground"
+                }`}
+                title={thinkingEnabled ? "Thinking mode включён" : "Включить thinking mode"}
+              >
+                <Brain className="h-5 w-5" />
+              </button>
+              <button
+                onClick={toggleTheme}
+                className="rounded-lg p-2 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+              >
+                {isDark ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+              </button>
+              <button className="rounded-lg p-2 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors">
+                <Share className="h-5 w-5" />
+              </button>
+              <button
+                onClick={signOut}
+                className="rounded-lg p-2 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+                title="Выйти"
+              >
+                <LogOut className="h-5 w-5" />
+              </button>
+            </div>
+          </header>
+        )}
+
+        {/* Mobile floating header buttons */}
+        {isMobile && (
+          <div className="absolute top-0 left-0 right-0 z-30 flex items-center justify-between px-2 pt-2 pointer-events-none">
             <button
-              onClick={() => setSidebarOpen(!sidebarOpen)}
-              className="rounded-lg p-2 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors flex-shrink-0"
+              onClick={() => setSidebarOpen(true)}
+              className="pointer-events-auto rounded-xl p-2.5 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
             >
               <Menu className="h-5 w-5" />
             </button>
-            <div className="min-w-0 overflow-hidden">
+
+            {/* Mobile model selector centered */}
+            <div className="pointer-events-auto">
               <ModelSelector selectedModel={selectedModel} onSelect={handleModelSelect} />
             </div>
-          </div>
 
-          <div className="flex items-center gap-0.5 flex-shrink-0">
-            <button
-              onClick={() => setThinkingEnabled(!thinkingEnabled)}
-              className={`rounded-lg p-2 transition-colors ${
-                thinkingEnabled
-                  ? "bg-primary/10 text-primary"
-                  : "text-muted-foreground hover:bg-secondary hover:text-foreground"
-              }`}
-              title={thinkingEnabled ? "Thinking mode включён" : "Включить thinking mode"}
-            >
-              <Brain className="h-5 w-5" />
-            </button>
-            <button
-              onClick={toggleTheme}
-              className="rounded-lg p-2 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
-            >
-              {isDark ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
-            </button>
-            <button className="hidden sm:flex rounded-lg p-2 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors">
-              <Share className="h-5 w-5" />
-            </button>
-            <button
-              onClick={signOut}
-              className="rounded-lg p-2 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
-              title="Выйти"
-            >
-              <LogOut className="h-5 w-5" />
-            </button>
+            <div className="flex items-center gap-0.5 pointer-events-auto">
+              <button
+                onClick={() => setThinkingEnabled(!thinkingEnabled)}
+                className={`rounded-xl p-2.5 transition-colors ${
+                  thinkingEnabled
+                    ? "bg-primary/10 text-primary"
+                    : "text-muted-foreground hover:bg-secondary hover:text-foreground"
+                }`}
+              >
+                <Brain className="h-5 w-5" />
+              </button>
+              <button
+                onClick={handleNewChat}
+                className="rounded-xl p-2.5 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+                title="Новый чат"
+              >
+                <SquarePen className="h-5 w-5" />
+              </button>
+            </div>
           </div>
-        </header>
+        )}
 
         {/* Chat content */}
         <div className="flex flex-1 flex-col overflow-hidden">
           {displayMessages.length === 0 ? (
-            <EmptyState onSuggestionClick={handleSuggestionClick} />
+            <EmptyState onSuggestionClick={handleSuggestionClick} isMobile={isMobile} />
           ) : (
-            <div className="flex-1 overflow-y-auto px-3 sm:px-4 scrollbar-thin">
+            <div className={`flex-1 overflow-y-auto px-3 sm:px-4 scrollbar-thin ${isMobile ? "pt-14" : ""}`}>
               <div className="mx-auto max-w-3xl">
                 {displayMessages.map((msg, i) => (
                   <div key={msg.id} className="group">
