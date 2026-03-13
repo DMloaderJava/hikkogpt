@@ -8,6 +8,7 @@ export interface Message {
   role: "user" | "assistant";
   content: string;
   image_url?: string;
+  images?: string[];
   thinking?: string;
   timestamp: Date;
 }
