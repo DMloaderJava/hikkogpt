@@ -324,7 +324,7 @@ export function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
               >
                 <Copy className={`h-3.5 w-3.5 ${copied ? "text-primary" : ""}`} />
               </button>
-              {voiceSupported && (
+              {true && (
                 <button
                   onClick={handleSpeak}
                   className={`rounded-lg p-1.5 transition-colors ${
@@ -334,7 +334,15 @@ export function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
                   }`}
                   title={isSpeaking ? "Остановить" : "Озвучить"}
                 >
-                  {isSpeaking ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
+                  {ttsState === "loading" ? (
+                    <span className="h-3.5 w-3.5 flex items-center justify-center">
+                      <span className="h-2 w-2 rounded-full bg-current animate-pulse" />
+                    </span>
+                  ) : isSpeaking ? (
+                    <VolumeX className="h-3.5 w-3.5" />
+                  ) : (
+                    <Volume2 className="h-3.5 w-3.5" />
+                  )}
                 </button>
               )}
               <button
