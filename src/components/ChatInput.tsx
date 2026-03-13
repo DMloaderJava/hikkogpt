@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { ArrowUp, Square, X, Image, Search, Mic, MicOff, Loader2, Plus, ImageSearch } from "lucide-react";
+import { ArrowUp, Square, X, Image, Search, Mic, MicOff, Loader2, Plus } from "lucide-react";
 import { useVoice } from "@/hooks/useVoice";
 import { ImageSearchModal } from "@/components/ImageSearchModal";
 
