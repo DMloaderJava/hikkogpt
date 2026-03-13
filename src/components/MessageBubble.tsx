@@ -1,7 +1,80 @@
-import { Copy, ThumbsUp, ThumbsDown, RotateCcw, Volume2, VolumeX, Pencil, Sparkles, ChevronDown, ChevronRight, Brain } from "lucide-react";
-import { useState, useCallback } from "react";
+import { useState, useRef, useCallback } from "react";
 import type { Message } from "@/hooks/useChat";
-import { useVoice } from "@/hooks/useVoice";
+
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
+type VoiceState = "idle" | "loading" | "playing";
+
+function useGeminiTTS() {
+  const [state, setState] = useState<VoiceState>("idle");
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  const speak = useCallback(async (text: string) => {
+    // Clean markdown
+    const clean = text
+      .replace(/```[\s\S]*?```/g, "код")
+      .replace(/`[^`]+`/g, "")
+      .replace(/\*\*(.*?)\*\*/g, "$1")
+      .replace(/\*(.*?)\*/g, "$1")
+      .replace(/#{1,3}\s/g, "")
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+      .replace(/---/g, "")
+      .replace(/\n{2,}/g, ". ")
+      .replace(/\n/g, " ")
+      .trim();
+
+    if (!clean) return;
+
+    // Stop current audio
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+
+    setState("loading");
+    try {
+      const resp = await fetch(`${SUPABASE_URL}/functions/v1/gemini-tts`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        },
+        body: JSON.stringify({ text: clean.slice(0, 4000), voice: "Aoede", language: "ru-RU" }),
+      });
+
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        console.error("TTS error:", err);
+        setState("idle");
+        return;
+      }
+
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audioRef.current = audio;
+
+      audio.onplay = () => setState("playing");
+      audio.onended = () => { setState("idle"); URL.revokeObjectURL(url); };
+      audio.onerror = () => { setState("idle"); URL.revokeObjectURL(url); };
+      audio.play();
+    } catch (err) {
+      console.error("TTS fetch error:", err);
+      setState("idle");
+    }
+  }, []);
+
+  const stop = useCallback(() => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    setState("idle");
+  }, []);
+
+  return { state, speak, stop };
+}
 
 interface MessageBubbleProps {
   message: Message;
