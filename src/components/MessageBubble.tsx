@@ -174,8 +174,20 @@ export function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
         )}
 
         <div className={`flex-1 min-w-0 ${isUser ? "text-right" : ""}`}>
-          {/* User image attachment */}
-          {isUser && message.image_url && (
+          {/* User image attachments */}
+          {isUser && (message.images?.length ?? 0) > 0 && (
+            <div className="mb-2 flex justify-end flex-wrap gap-2">
+              {(message.images || (message.image_url ? [message.image_url] : [])).map((src, i) => (
+                <img
+                  key={i}
+                  src={src}
+                  alt={`Attached ${i + 1}`}
+                  className="max-h-48 rounded-xl object-cover border border-border"
+                />
+              ))}
+            </div>
+          )}
+          {isUser && !message.images && message.image_url && (
             <div className="mb-2 flex justify-end">
               <img
                 src={message.image_url}
