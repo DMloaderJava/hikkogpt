@@ -1,3 +1,4 @@
+import { Copy, ThumbsUp, ThumbsDown, RotateCcw, Volume2, VolumeX, Pencil, Sparkles, ChevronDown, ChevronRight, Brain } from "lucide-react";
 import { useState, useRef, useCallback } from "react";
 import type { Message } from "@/hooks/useChat";
 
