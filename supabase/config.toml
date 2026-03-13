@@ -5,3 +5,9 @@ verify_jwt = false
 
 [functions.deepsearch]
 verify_jwt = false
+
+[functions.elevenlabs-stt]
+verify_jwt = false
+
+[functions.gemini-tts]
+verify_jwt = false
