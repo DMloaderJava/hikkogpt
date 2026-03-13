@@ -220,8 +220,8 @@ export function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
   const [liked, setLiked] = useState<boolean | null>(null);
   const isUser = message.role === "user";
 
-  const { state: voiceState, supported: voiceSupported, speak, stopSpeaking } = useVoice();
-  const isSpeaking = voiceState === "speaking";
+  const { state: ttsState, speak, stop: stopSpeaking } = useGeminiTTS();
+  const isSpeaking = ttsState === "playing" || ttsState === "loading";
 
   const handleCopy = useCallback(() => {
     navigator.clipboard.writeText(message.content);
