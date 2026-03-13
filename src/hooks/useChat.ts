@@ -8,6 +8,7 @@ export interface Message {
   role: "user" | "assistant";
   content: string;
   image_url?: string;
+  images?: string[];
   thinking?: string;
   timestamp: Date;
 }
@@ -119,7 +120,7 @@ export function useChat() {
   }, []);
 
   const sendMessage = useCallback(
-    async (content: string, imageBase64?: string) => {
+    async (content: string, images?: string[]) => {
       if (!user) return;
       let chatId = activeChatId;
       let existingMessages: Message[] = [];
@@ -152,6 +153,9 @@ export function useChat() {
         existingMessages = chats.find((c) => c.id === chatId)?.messages || [];
       }
 
+      // Use first image for DB storage (legacy single image_url column)
+      const firstImage = images?.[0] || null;
+
       // Insert user message to DB
       const { data: userMsgData } = await supabase
         .from("messages")
@@ -159,7 +163,7 @@ export function useChat() {
           chat_id: chatId,
           role: "user",
           content,
-          image_url: imageBase64 || null,
+          image_url: firstImage,
         })
         .select()
         .single();
@@ -168,7 +172,8 @@ export function useChat() {
         id: userMsgData?.id || crypto.randomUUID(),
         role: "user",
         content,
-        image_url: imageBase64 || undefined,
+        image_url: firstImage || undefined,
+        images: images || undefined,
         timestamp: new Date(),
       };
 
@@ -186,26 +191,27 @@ export function useChat() {
         );
       }
 
-      // Build API messages
+      // Build API messages (support multiple images)
       const apiMessages = [
         ...existingMessages.map((m) => {
-          if (m.image_url) {
+          const imgs = m.images || (m.image_url ? [m.image_url] : []);
+          if (imgs.length > 0) {
             return {
               role: m.role,
               content: [
                 { type: "text", text: m.content },
-                { type: "image_url", image_url: { url: m.image_url } },
+                ...imgs.map(url => ({ type: "image_url", image_url: { url } })),
               ],
             };
           }
           return { role: m.role, content: m.content };
         }),
-        imageBase64
+        images && images.length > 0
           ? {
               role: "user" as const,
               content: [
                 { type: "text", text: content },
-                { type: "image_url", image_url: { url: imageBase64 } },
+                ...images.map(url => ({ type: "image_url", image_url: { url } })),
               ],
             }
           : { role: "user" as const, content },

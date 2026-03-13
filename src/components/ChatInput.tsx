@@ -1,9 +1,9 @@
 import { useState, useRef, useEffect } from "react";
-import { ArrowUp, Square, X, Image, Search, Mic, MicOff, Loader2 } from "lucide-react";
+import { ArrowUp, Square, X, Image, Search, Mic, MicOff, Loader2, Plus } from "lucide-react";
 import { useVoice } from "@/hooks/useVoice";
 
 interface ChatInputProps {
-  onSend: (message: string, imageBase64?: string) => void;
+  onSend: (message: string, images?: string[]) => void;
   isStreaming: boolean;
   onStop: () => void;
   deepSearchEnabled?: boolean;
@@ -13,7 +13,7 @@ interface ChatInputProps {
 
 export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = true, deepSearchUsed = false, onDeepSearch }: ChatInputProps) {
   const [value, setValue] = useState("");
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [imagePreviews, setImagePreviews] = useState<string[]>([]);
   const [deepSearchMode, setDeepSearchMode] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -34,14 +34,26 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
   }, [value]);
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (!file.type.startsWith("image/")) return;
-    if (file.size > 10 * 1024 * 1024) return;
-    const reader = new FileReader();
-    reader.onload = () => setImagePreview(reader.result as string);
-    reader.readAsDataURL(file);
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+
+    const validFiles = files.filter(f => f.type.startsWith("image/") && f.size <= 10 * 1024 * 1024);
+    const remaining = 5 - imagePreviews.length;
+    const toProcess = validFiles.slice(0, remaining);
+
+    toProcess.forEach(file => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        setImagePreviews(prev => [...prev, reader.result as string]);
+      };
+      reader.readAsDataURL(file);
+    });
+
     if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const removeImage = (index: number) => {
+    setImagePreviews(prev => prev.filter((_, i) => i !== index));
   };
 
   const handleSubmit = () => {
@@ -49,7 +61,7 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
       onStop();
       return;
     }
-    if (!value.trim() && !imagePreview) return;
+    if (!value.trim() && imagePreviews.length === 0) return;
 
     if (deepSearchMode && onDeepSearch) {
       onDeepSearch(value.trim());
@@ -59,9 +71,10 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
       return;
     }
 
-    onSend(value.trim() || "Что на этом изображении?", imagePreview || undefined);
+    const text = value.trim() || (imagePreviews.length > 0 ? "Что на этих изображениях?" : "");
+    onSend(text, imagePreviews.length > 0 ? imagePreviews : undefined);
     setValue("");
-    setImagePreview(null);
+    setImagePreviews([]);
     if (textareaRef.current) textareaRef.current.style.height = "auto";
   };
 
@@ -79,20 +92,36 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
 
   const isListening = voiceState === "listening";
   const isProcessing = voiceState === "processing";
+  const canAddMore = imagePreviews.length < 5;
 
   return (
     <div
       className="mx-auto w-full max-w-3xl px-3 sm:px-4 pb-3 sm:pb-4"
       style={{ paddingBottom: "max(12px, env(safe-area-inset-bottom, 12px))" }}
     >
-      {imagePreview && (
-        <div className="mb-2 flex items-start gap-2">
-          <div className="relative">
-            <img src={imagePreview} alt="Preview" className="h-16 w-16 sm:h-20 sm:w-20 rounded-lg object-cover border border-border" />
-            <button onClick={() => setImagePreview(null)} className="absolute -top-1.5 -right-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-destructive text-destructive-foreground text-xs">
-              <X className="h-3 w-3" />
+      {/* Image previews row */}
+      {imagePreviews.length > 0 && (
+        <div className="mb-2 flex items-start gap-2 flex-wrap">
+          {imagePreviews.map((src, i) => (
+            <div key={i} className="relative flex-shrink-0">
+              <img src={src} alt={`Preview ${i + 1}`} className="h-16 w-16 sm:h-20 sm:w-20 rounded-lg object-cover border border-border" />
+              <button
+                onClick={() => removeImage(i)}
+                className="absolute -top-1.5 -right-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-destructive text-destructive-foreground text-xs"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+          ))}
+          {canAddMore && (
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="flex h-16 w-16 sm:h-20 sm:w-20 flex-shrink-0 items-center justify-center rounded-lg border-2 border-dashed border-border text-muted-foreground hover:border-ring/50 hover:text-foreground transition-colors"
+              title="Добавить ещё изображение"
+            >
+              <Plus className="h-5 w-5" />
             </button>
-          </div>
+          )}
         </div>
       )}
 
@@ -124,14 +153,22 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
       )}
 
       <div className="relative flex items-end rounded-2xl border border-border bg-secondary/50 shadow-sm transition-all duration-200 focus-within:border-ring/50 focus-within:shadow-md">
-        <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileSelect} />
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          capture={undefined}
+          className="hidden"
+          onChange={handleFileSelect}
+        />
 
         {/* Left buttons */}
         <div className="flex items-center pl-1">
           <button
             onClick={() => fileInputRef.current?.click()}
             className="flex-shrink-0 rounded-lg p-2 sm:p-2.5 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
-            title="Прикрепить изображение"
+            title="Прикрепить изображения"
           >
             <Image style={{ width: "18px", height: "18px" }} />
           </button>
@@ -195,11 +232,11 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
 
         <button
           onClick={handleSubmit}
-          disabled={!isStreaming && !value.trim() && !imagePreview}
+          disabled={!isStreaming && !value.trim() && imagePreviews.length === 0}
           className={`m-2 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg transition-all ${
             isStreaming
               ? "bg-foreground text-background"
-              : value.trim() || imagePreview
+              : value.trim() || imagePreviews.length > 0
               ? "bg-foreground text-background hover:opacity-80 scale-100"
               : "bg-muted text-muted-foreground cursor-not-allowed"
           }`}

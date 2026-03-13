@@ -1,7 +1,81 @@
 import { Copy, ThumbsUp, ThumbsDown, RotateCcw, Volume2, VolumeX, Pencil, Sparkles, ChevronDown, ChevronRight, Brain } from "lucide-react";
-import { useState, useCallback } from "react";
+import { useState, useRef, useCallback } from "react";
 import type { Message } from "@/hooks/useChat";
-import { useVoice } from "@/hooks/useVoice";
+
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
+type VoiceState = "idle" | "loading" | "playing";
+
+function useGeminiTTS() {
+  const [state, setState] = useState<VoiceState>("idle");
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  const speak = useCallback(async (text: string) => {
+    // Clean markdown
+    const clean = text
+      .replace(/```[\s\S]*?```/g, "код")
+      .replace(/`[^`]+`/g, "")
+      .replace(/\*\*(.*?)\*\*/g, "$1")
+      .replace(/\*(.*?)\*/g, "$1")
+      .replace(/#{1,3}\s/g, "")
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+      .replace(/---/g, "")
+      .replace(/\n{2,}/g, ". ")
+      .replace(/\n/g, " ")
+      .trim();
+
+    if (!clean) return;
+
+    // Stop current audio
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+
+    setState("loading");
+    try {
+      const resp = await fetch(`${SUPABASE_URL}/functions/v1/gemini-tts`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        },
+        body: JSON.stringify({ text: clean.slice(0, 4000), voice: "Aoede", language: "ru-RU" }),
+      });
+
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        console.error("TTS error:", err);
+        setState("idle");
+        return;
+      }
+
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audioRef.current = audio;
+
+      audio.onplay = () => setState("playing");
+      audio.onended = () => { setState("idle"); URL.revokeObjectURL(url); };
+      audio.onerror = () => { setState("idle"); URL.revokeObjectURL(url); };
+      audio.play();
+    } catch (err) {
+      console.error("TTS fetch error:", err);
+      setState("idle");
+    }
+  }, []);
+
+  const stop = useCallback(() => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    setState("idle");
+  }, []);
+
+  return { state, speak, stop };
+}
 
 interface MessageBubbleProps {
   message: Message;
@@ -146,8 +220,8 @@ export function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
   const [liked, setLiked] = useState<boolean | null>(null);
   const isUser = message.role === "user";
 
-  const { state: voiceState, supported: voiceSupported, speak, stopSpeaking } = useVoice();
-  const isSpeaking = voiceState === "speaking";
+  const { state: ttsState, speak, stop: stopSpeaking } = useGeminiTTS();
+  const isSpeaking = ttsState === "playing" || ttsState === "loading";
 
   const handleCopy = useCallback(() => {
     navigator.clipboard.writeText(message.content);
@@ -174,8 +248,20 @@ export function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
         )}
 
         <div className={`flex-1 min-w-0 ${isUser ? "text-right" : ""}`}>
-          {/* User image attachment */}
-          {isUser && message.image_url && (
+          {/* User image attachments */}
+          {isUser && (message.images?.length ?? 0) > 0 && (
+            <div className="mb-2 flex justify-end flex-wrap gap-2">
+              {(message.images || (message.image_url ? [message.image_url] : [])).map((src, i) => (
+                <img
+                  key={i}
+                  src={src}
+                  alt={`Attached ${i + 1}`}
+                  className="max-h-48 rounded-xl object-cover border border-border"
+                />
+              ))}
+            </div>
+          )}
+          {isUser && !message.images && message.image_url && (
             <div className="mb-2 flex justify-end">
               <img
                 src={message.image_url}
@@ -238,7 +324,7 @@ export function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
               >
                 <Copy className={`h-3.5 w-3.5 ${copied ? "text-primary" : ""}`} />
               </button>
-              {voiceSupported && (
+              {true && (
                 <button
                   onClick={handleSpeak}
                   className={`rounded-lg p-1.5 transition-colors ${
@@ -248,7 +334,15 @@ export function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
                   }`}
                   title={isSpeaking ? "Остановить" : "Озвучить"}
                 >
-                  {isSpeaking ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
+                  {ttsState === "loading" ? (
+                    <span className="h-3.5 w-3.5 flex items-center justify-center">
+                      <span className="h-2 w-2 rounded-full bg-current animate-pulse" />
+                    </span>
+                  ) : isSpeaking ? (
+                    <VolumeX className="h-3.5 w-3.5" />
+                  ) : (
+                    <Volume2 className="h-3.5 w-3.5" />
+                  )}
                 </button>
               )}
               <button

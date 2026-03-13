@@ -93,13 +93,13 @@ const Index = () => {
   }, [deepSearch.phase, deepSearch.used, startClarify, sendMessage]);
 
   const handleSendWithDeepSearchCheck = useCallback(
-    async (content: string, imageBase64?: string) => {
+    async (content: string, images?: string[]) => {
       if (deepSearch.phase === "waiting_answers" && content.trim()) {
-        await sendMessage(content, imageBase64);
+        await sendMessage(content, images);
         startSearch(deepSearchQuery, content);
         return;
       }
-      sendMessage(content, imageBase64);
+      sendMessage(content, images);
     },
     [deepSearch.phase, deepSearchQuery, sendMessage, startSearch]
   );
