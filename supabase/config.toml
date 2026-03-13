@@ -11,3 +11,6 @@ verify_jwt = false
 
 [functions.gemini-tts]
 verify_jwt = false
+
+[functions.image-search]
+verify_jwt = false
