@@ -119,7 +119,7 @@ export function useChat() {
   }, []);
 
   const sendMessage = useCallback(
-    async (content: string, imageBase64?: string) => {
+    async (content: string, images?: string[]) => {
       if (!user) return;
       let chatId = activeChatId;
       let existingMessages: Message[] = [];
