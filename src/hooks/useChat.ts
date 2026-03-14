@@ -23,6 +23,37 @@ export interface Chat {
 }
 
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat`;
+const IMAGE_SEARCH_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/image-search`;
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
+// Resolves [IMAGE_SEARCH: query] tags → markdown images
+async function resolveImageSearchTags(text: string): Promise<string> {
+  const tagRegex = /\[IMAGE_SEARCH:\s*([^\]]+)\]/g;
+  const matches = [...text.matchAll(tagRegex)];
+  if (matches.length === 0) return text;
+
+  let result = text;
+  for (const match of matches) {
+    const query = match[1].trim();
+    try {
+      const resp = await fetch(IMAGE_SEARCH_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+        body: JSON.stringify({ query }),
+      });
+      if (!resp.ok) { result = result.replace(match[0], ""); continue; }
+      const data = await resp.json();
+      const imgs: { url: string; title: string }[] = data.results || [];
+      if (imgs.length === 0) { result = result.replace(match[0], ""); continue; }
+      // Take up to 3 images, render as markdown
+      const mdImages = imgs.slice(0, 3).map(img => `![${img.title || query}](${img.url})`).join("\n");
+      result = result.replace(match[0], `\n${mdImages}\n`);
+    } catch {
+      result = result.replace(match[0], "");
+    }
+  }
+  return result;
+}
 
 export function useChat() {
   const { user } = useAuth();
