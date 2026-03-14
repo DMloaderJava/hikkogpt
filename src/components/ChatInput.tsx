@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { ArrowUp, Square, X, Image, Search, Mic, MicOff, Loader2, Plus } from "lucide-react";
 import { useVoice } from "@/hooks/useVoice";
-import { ImageSearchModal } from "@/components/ImageSearchModal";
 
 interface ChatInputProps {
   onSend: (message: string, images?: string[]) => void;
@@ -16,7 +15,6 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
   const [value, setValue] = useState("");
   const [imagePreviews, setImagePreviews] = useState<string[]>([]);
   const [deepSearchMode, setDeepSearchMode] = useState(false);
-  const [imageSearchOpen, setImageSearchOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -45,10 +43,6 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
       reader.readAsDataURL(file);
     });
     if (fileInputRef.current) fileInputRef.current.value = "";
-  };
-
-  const handleImageSearchSelect = (urls: string[]) => {
-    setImagePreviews(prev => [...prev, ...urls].slice(0, 5));
   };
 
   const removeImage = (index: number) => setImagePreviews(prev => prev.filter((_, i) => i !== index));
@@ -137,19 +131,6 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
             <Image style={{ width: "18px", height: "18px" }} />
           </button>
 
-          <button
-            onClick={() => setImageSearchOpen(true)}
-            className="flex-shrink-0 rounded-lg p-2 sm:p-2.5 text-muted-foreground hover:bg-accent hover:text-foreground active:scale-90 transition-all"
-            title="Поиск изображений в интернете"
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="3" y="3" width="18" height="18" rx="2"/>
-              <circle cx="8.5" cy="8.5" r="1.5"/>
-              <polyline points="21 15 16 10 5 21"/>
-              <circle cx="15" cy="15" r="4"/>
-              <line x1="21" y1="21" x2="18.3" y2="18.3"/>
-            </svg>
-          </button>
 
           {deepSearchEnabled && (
             <button
@@ -212,10 +193,6 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
         HikkoGPT может допускать ошибки. Проверяйте важную информацию.
       </p>
 
-      {/* Image search modal */}
-      {imageSearchOpen && (
-        <ImageSearchModal onSelect={handleImageSearchSelect} onClose={() => setImageSearchOpen(false)} />
-      )}
     </div>
   );
 }
