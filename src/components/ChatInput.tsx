@@ -193,10 +193,6 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
         HikkoGPT может допускать ошибки. Проверяйте важную информацию.
       </p>
 
-      {/* Image search modal */}
-      {imageSearchOpen && (
-        <ImageSearchModal onSelect={handleImageSearchSelect} onClose={() => setImageSearchOpen(false)} />
-      )}
     </div>
   );
 }
