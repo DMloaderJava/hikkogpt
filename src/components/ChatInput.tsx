@@ -15,7 +15,6 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
   const [value, setValue] = useState("");
   const [imagePreviews, setImagePreviews] = useState<string[]>([]);
   const [deepSearchMode, setDeepSearchMode] = useState(false);
-  const [imageSearchOpen, setImageSearchOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -44,10 +43,6 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
       reader.readAsDataURL(file);
     });
     if (fileInputRef.current) fileInputRef.current.value = "";
-  };
-
-  const handleImageSearchSelect = (urls: string[]) => {
-    setImagePreviews(prev => [...prev, ...urls].slice(0, 5));
   };
 
   const removeImage = (index: number) => setImagePreviews(prev => prev.filter((_, i) => i !== index));
