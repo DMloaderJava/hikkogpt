@@ -384,6 +384,24 @@ export function useChat() {
           );
         }
 
+        // Resolve [IMAGE_SEARCH: ...] tags → real images
+        if (assistantSoFar.includes("[IMAGE_SEARCH:")) {
+          const resolved = await resolveImageSearchTags(assistantSoFar);
+          assistantSoFar = resolved;
+          setChats((prev) =>
+            prev.map((c) =>
+              c.id === chatId
+                ? {
+                    ...c,
+                    messages: c.messages.map((m) =>
+                      m.id === assistantMsgId ? { ...m, content: resolved } : m
+                    ),
+                  }
+                : c
+            )
+          );
+        }
+
         // Save assistant message to DB
         await supabase.from("messages").insert({
           chat_id: chatId,
