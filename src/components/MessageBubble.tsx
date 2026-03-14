@@ -2,9 +2,6 @@ import { Copy, ThumbsUp, ThumbsDown, RotateCcw, Volume2, VolumeX, Pencil, Sparkl
 import { useState, useRef, useCallback } from "react";
 import type { Message } from "@/hooks/useChat";
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-
 type VoiceState = "idle" | "loading" | "playing";
 
 // Maps our named voices to browser voice name hints
