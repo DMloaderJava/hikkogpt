@@ -2,12 +2,12 @@ import { useState } from "react";
 import { X, Volume2, Moon, Sun, LogOut } from "lucide-react";
 
 const TTS_VOICES = [
-  { id: "Aoede", label: "Aoede", desc: "Мягкий женский" },
-  { id: "Charon", label: "Charon", desc: "Глубокий мужской" },
-  { id: "Fenrir", label: "Fenrir", desc: "Чёткий мужской" },
-  { id: "Kore", label: "Kore", desc: "Тёплый женский" },
-  { id: "Puck", label: "Puck", desc: "Живой нейтральный" },
-  { id: "Leda", label: "Leda", desc: "Спокойный женский" },
+  { id: "Aoede", label: "Aoede", desc: "Женский голос" },
+  { id: "Charon", label: "Charon", desc: "Мужской голос" },
+  { id: "Fenrir", label: "Fenrir", desc: "Мужской чёткий" },
+  { id: "Kore", label: "Kore", desc: "Женский тёплый" },
+  { id: "Puck", label: "Puck", desc: "Нейтральный" },
+  { id: "Leda", label: "Leda", desc: "Женский спокойный" },
 ];
 
 interface SettingsPanelProps {
