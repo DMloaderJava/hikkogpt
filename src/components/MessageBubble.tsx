@@ -2,16 +2,41 @@ import { Copy, ThumbsUp, ThumbsDown, RotateCcw, Volume2, VolumeX, Pencil, Sparkl
 import { useState, useRef, useCallback } from "react";
 import type { Message } from "@/hooks/useChat";
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-
 type VoiceState = "idle" | "loading" | "playing";
+
+// Maps our named voices to browser voice name hints
+const VOICE_LANG_MAP: Record<string, { lang: string; gender: "female" | "male" | "neutral" }> = {
+  Aoede: { lang: "ru-RU", gender: "female" },
+  Charon: { lang: "ru-RU", gender: "male" },
+  Fenrir: { lang: "ru-RU", gender: "male" },
+  Kore: { lang: "ru-RU", gender: "female" },
+  Puck: { lang: "ru-RU", gender: "neutral" },
+  Leda: { lang: "ru-RU", gender: "female" },
+};
+
+function pickBrowserVoice(voiceName: string): SpeechSynthesisVoice | null {
+  const voices = window.speechSynthesis.getVoices();
+  if (!voices.length) return null;
+  const hint = VOICE_LANG_MAP[voiceName] || { lang: "ru-RU", gender: "neutral" };
+  // Try to find a Russian voice matching the gender hint
+  const ruVoices = voices.filter(v => v.lang.startsWith("ru"));
+  if (ruVoices.length === 0) return voices[0];
+  if (hint.gender === "male") return ruVoices.find(v => /male|мужской/i.test(v.name)) || ruVoices[0];
+  if (hint.gender === "female") return ruVoices.find(v => /female|женский/i.test(v.name)) || ruVoices[0];
+  return ruVoices[0];
+}
 
 function useGeminiTTS() {
   const [state, setState] = useState<VoiceState>("idle");
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const uttRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const stateRef = useRef<VoiceState>("idle");
 
-  const speak = useCallback(async (text: string, voice = "Aoede") => {
+  const setStateSync = (s: VoiceState) => {
+    stateRef.current = s;
+    setState(s);
+  };
+
+  const speak = useCallback((text: string, voice = "Aoede") => {
     const clean = text
       .replace(/```[\s\S]*?```/g, "код")
       .replace(/`[^`]+`/g, "")
@@ -19,35 +44,48 @@ function useGeminiTTS() {
       .replace(/\*(.*?)\*/g, "$1")
       .replace(/#{1,3}\s/g, "")
       .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+      .replace(/!\[[^\]]*\]\([^)]+\)/g, "")
       .replace(/---/g, "")
       .replace(/\n{2,}/g, ". ")
       .replace(/\n/g, " ")
       .trim();
     if (!clean) return;
 
-    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
-    setState("loading");
-    try {
-      const resp = await fetch(`${SUPABASE_URL}/functions/v1/gemini-tts`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
-        body: JSON.stringify({ text: clean.slice(0, 4000), voice, language: "ru-RU" }),
-      });
-      if (!resp.ok) { setState("idle"); return; }
-      const blob = await resp.blob();
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      audioRef.current = audio;
-      audio.onplay = () => setState("playing");
-      audio.onended = () => { setState("idle"); URL.revokeObjectURL(url); };
-      audio.onerror = () => { setState("idle"); URL.revokeObjectURL(url); };
-      audio.play();
-    } catch { setState("idle"); }
+    window.speechSynthesis.cancel();
+    setStateSync("loading");
+
+    const utt = new SpeechSynthesisUtterance(clean.slice(0, 4000));
+    utt.lang = "ru-RU";
+    utt.rate = 1.0;
+    utt.pitch = 1.0;
+
+    const doSpeak = () => {
+      const browserVoice = pickBrowserVoice(voice);
+      if (browserVoice) utt.voice = browserVoice;
+      utt.onstart = () => setStateSync("playing");
+      utt.onend = () => setStateSync("idle");
+      utt.onerror = () => setStateSync("idle");
+      uttRef.current = utt;
+      window.speechSynthesis.speak(utt);
+    };
+
+    if (window.speechSynthesis.getVoices().length > 0) {
+      doSpeak();
+    } else {
+      window.speechSynthesis.onvoiceschanged = () => {
+        window.speechSynthesis.onvoiceschanged = null;
+        doSpeak();
+      };
+      setTimeout(() => {
+        if (stateRef.current === "loading") doSpeak();
+      }, 600);
+    }
   }, []);
 
   const stop = useCallback(() => {
-    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
-    setState("idle");
+    window.speechSynthesis.cancel();
+    uttRef.current = null;
+    setStateSync("idle");
   }, []);
 
   return { state, speak, stop };
