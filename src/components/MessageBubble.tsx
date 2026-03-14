@@ -29,6 +29,12 @@ function pickBrowserVoice(voiceName: string): SpeechSynthesisVoice | null {
 function useGeminiTTS() {
   const [state, setState] = useState<VoiceState>("idle");
   const uttRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const stateRef = useRef<VoiceState>("idle");
+
+  const setStateSync = (s: VoiceState) => {
+    stateRef.current = s;
+    setState(s);
+  };
 
   const speak = useCallback((text: string, voice = "Aoede") => {
     const clean = text
@@ -46,43 +52,40 @@ function useGeminiTTS() {
     if (!clean) return;
 
     window.speechSynthesis.cancel();
-    setState("loading");
+    setStateSync("loading");
 
     const utt = new SpeechSynthesisUtterance(clean.slice(0, 4000));
     utt.lang = "ru-RU";
     utt.rate = 1.0;
     utt.pitch = 1.0;
 
-    const setVoiceAndSpeak = () => {
+    const doSpeak = () => {
       const browserVoice = pickBrowserVoice(voice);
       if (browserVoice) utt.voice = browserVoice;
-      utt.onstart = () => setState("playing");
-      utt.onend = () => setState("idle");
-      utt.onerror = () => setState("idle");
+      utt.onstart = () => setStateSync("playing");
+      utt.onend = () => setStateSync("idle");
+      utt.onerror = () => setStateSync("idle");
       uttRef.current = utt;
       window.speechSynthesis.speak(utt);
     };
 
-    // Voices may not be loaded yet
     if (window.speechSynthesis.getVoices().length > 0) {
-      setVoiceAndSpeak();
+      doSpeak();
     } else {
-      setState("loading");
       window.speechSynthesis.onvoiceschanged = () => {
         window.speechSynthesis.onvoiceschanged = null;
-        setVoiceAndSpeak();
+        doSpeak();
       };
-      // Fallback: just speak after a short delay
       setTimeout(() => {
-        if (state === "loading") setVoiceAndSpeak();
-      }, 500);
+        if (stateRef.current === "loading") doSpeak();
+      }, 600);
     }
   }, []);
 
   const stop = useCallback(() => {
     window.speechSynthesis.cancel();
     uttRef.current = null;
-    setState("idle");
+    setStateSync("idle");
   }, []);
 
   return { state, speak, stop };
