@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { ArrowUp, Square, X, Image, Search, Mic, MicOff, Loader2, Plus } from "lucide-react";
 import { useVoice } from "@/hooks/useVoice";
-import { ImageSearchModal } from "@/components/ImageSearchModal";
 
 interface ChatInputProps {
   onSend: (message: string, images?: string[]) => void;
