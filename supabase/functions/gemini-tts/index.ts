@@ -5,6 +5,16 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
 };
 
+// Map our voice IDs to OpenAI TTS voice names
+const VOICE_MAP: Record<string, string> = {
+  Aoede: 'nova',
+  Charon: 'onyx',
+  Fenrir: 'echo',
+  Kore: 'shimmer',
+  Puck: 'fable',
+  Leda: 'alloy',
+};
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -16,7 +26,7 @@ serve(async (req) => {
       throw new Error('LOVABLE_API_KEY is not configured');
     }
 
-    const { text, voice = 'Aoede', language = 'ru-RU' } = await req.json();
+    const { text, voice = 'Aoede' } = await req.json();
 
     if (!text) {
       return new Response(JSON.stringify({ error: 'No text provided' }), {
@@ -25,7 +35,9 @@ serve(async (req) => {
       });
     }
 
-    // Gemini TTS via Lovable AI gateway
+    const openaiVoice = VOICE_MAP[voice] || 'nova';
+
+    // Use OpenAI TTS via Lovable AI gateway
     const response = await fetch('https://ai.gateway.lovable.dev/v1/audio/speech', {
       method: 'POST',
       headers: {
@@ -33,10 +45,10 @@ serve(async (req) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'google/gemini-2.5-flash-preview-tts',
-        input: text,
-        voice: voice,
-        language_code: language,
+        model: 'openai/tts-1',
+        input: text.slice(0, 4096),
+        voice: openaiVoice,
+        response_format: 'mp3',
       }),
     });
 
@@ -54,14 +66,14 @@ serve(async (req) => {
         });
       }
       const errorText = await response.text();
-      throw new Error(`Gemini TTS failed [${response.status}]: ${errorText}`);
+      throw new Error(`TTS failed [${response.status}]: ${errorText}`);
     }
 
     // Return audio stream directly
     return new Response(response.body, {
       headers: {
         ...corsHeaders,
-        'Content-Type': response.headers.get('Content-Type') || 'audio/mpeg',
+        'Content-Type': 'audio/mpeg',
       },
     });
 
