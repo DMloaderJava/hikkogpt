@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Menu, Brain, X, SquarePen, Settings } from "lucide-react";
+import { Menu, Brain, X, SquarePen, Settings, ChevronDown } from "lucide-react";
 import { ChatSidebar } from "@/components/ChatSidebar";
 import { ChatInput } from "@/components/ChatInput";
 import { MessageBubble } from "@/components/MessageBubble";
@@ -30,7 +30,13 @@ const Index = () => {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [deepSearchQuery, setDeepSearchQuery] = useState("");
   const [ttsVoice, setTtsVoice] = useState(() => localStorage.getItem("tts-voice") || "Aoede");
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const sidebarRef = useRef<HTMLDivElement>(null);
+  const touchStartXRef = useRef<number>(0);
+  const touchStartYRef = useRef<number>(0);
 
   const handleVoiceChange = (v: string) => {
     setTtsVoice(v);
@@ -42,9 +48,46 @@ const Index = () => {
     else setSidebarOpen(false);
   }, [isMobile]);
 
+  // Auto scroll to bottom on new messages
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    if (isNearBottom) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
   }, [activeChat?.messages, deepSearch.report]);
+
+  // Show scroll button when not at bottom
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      setShowScrollBtn(distFromBottom > 200);
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [activeChat]);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  // Swipe to close sidebar on mobile
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    touchStartXRef.current = e.touches[0].clientX;
+    touchStartYRef.current = e.touches[0].clientY;
+  }, []);
+
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    const dx = touchStartXRef.current - e.changedTouches[0].clientX;
+    const dy = Math.abs(touchStartYRef.current - e.changedTouches[0].clientY);
+    // Swipe left ≥ 60px, and mostly horizontal
+    if (dx > 60 && dy < 80 && sidebarOpen && isMobile) {
+      setSidebarOpen(false);
+    }
+  }, [sidebarOpen, isMobile]);
 
   const prevChatIdRef = useRef(activeChatId);
   useEffect(() => {
@@ -113,23 +156,36 @@ const Index = () => {
   const isDeepSearchActive = ["searching", "clarifying", "generating_queries", "analyzing"].includes(deepSearch.phase);
 
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-background">
+    <div
+      className="flex h-screen w-full overflow-hidden bg-background"
+      onTouchStart={isMobile && sidebarOpen ? handleTouchStart : undefined}
+      onTouchEnd={isMobile && sidebarOpen ? handleTouchEnd : undefined}
+    >
       {/* Mobile sidebar overlay */}
       {isMobile && sidebarOpen && (
-        <div className="fixed inset-0 z-40 bg-background/60 backdrop-blur-sm" onClick={() => setSidebarOpen(false)} />
+        <div
+          className="fixed inset-0 z-40 bg-background/60 backdrop-blur-sm"
+          onClick={() => setSidebarOpen(false)}
+        />
       )}
 
       {/* Sidebar */}
-      <div className={`
-        flex-shrink-0 transition-all duration-300 border-r border-sidebar-border
-        ${isMobile
-          ? `fixed inset-y-0 left-0 z-50 ${sidebarOpen ? "translate-x-0 w-[85vw] max-w-[320px]" : "-translate-x-full w-[85vw] max-w-[320px]"} transition-transform`
-          : `${sidebarOpen ? "w-64" : "w-0"} overflow-hidden`
-        }
-      `}>
+      <div
+        ref={sidebarRef}
+        className={`
+          flex-shrink-0 transition-all duration-300 border-r border-sidebar-border
+          ${isMobile
+            ? `fixed inset-y-0 left-0 z-50 ${sidebarOpen ? "translate-x-0 w-[85vw] max-w-[320px]" : "-translate-x-full w-[85vw] max-w-[320px]"} transition-transform`
+            : `${sidebarOpen ? "w-64" : "w-0"} overflow-hidden`
+          }
+        `}
+      >
         <div className={isMobile ? "h-full" : "h-full w-64"}>
           {isMobile && sidebarOpen && (
-            <button onClick={() => setSidebarOpen(false)} className="absolute right-3 top-3 z-10 rounded-lg p-1.5 text-muted-foreground hover:bg-sidebar-accent transition-colors">
+            <button
+              onClick={() => setSidebarOpen(false)}
+              className="absolute right-3 top-3 z-10 rounded-lg p-1.5 text-muted-foreground hover:bg-sidebar-accent transition-colors"
+            >
               <X className="h-4 w-4" />
             </button>
           )}
@@ -148,7 +204,10 @@ const Index = () => {
         {!isMobile && (
           <header className="flex items-center justify-between border-b border-border px-3 py-2 gap-2 flex-shrink-0">
             <div className="flex items-center gap-1.5 min-w-0">
-              <button onClick={() => setSidebarOpen(!sidebarOpen)} className="rounded-lg p-2 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors flex-shrink-0">
+              <button
+                onClick={() => setSidebarOpen(!sidebarOpen)}
+                className="rounded-lg p-2 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors flex-shrink-0"
+              >
                 <Menu className="h-5 w-5" />
               </button>
               <div className="min-w-0 overflow-hidden">
@@ -163,7 +222,11 @@ const Index = () => {
               >
                 <Brain className="h-5 w-5" />
               </button>
-              <button onClick={() => setSettingsOpen(true)} className="rounded-lg p-2 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors" title="Настройки">
+              <button
+                onClick={() => setSettingsOpen(true)}
+                className="rounded-lg p-2 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+                title="Настройки"
+              >
                 <Settings className="h-5 w-5" />
               </button>
             </div>
@@ -172,10 +235,14 @@ const Index = () => {
 
         {/* Mobile floating header */}
         {isMobile && (
-          <div className="absolute top-0 left-0 right-0 z-30 flex items-center justify-between px-1.5 pt-2 pointer-events-none"
+          <div
+            className="absolute top-0 left-0 right-0 z-30 flex items-center justify-between px-1.5 pointer-events-none"
             style={{ paddingTop: "max(8px, env(safe-area-inset-top, 8px))" }}
           >
-            <button onClick={() => setSidebarOpen(true)} className="pointer-events-auto rounded-xl p-2.5 text-muted-foreground hover:bg-secondary/80 active:scale-90 transition-all">
+            <button
+              onClick={() => setSidebarOpen(true)}
+              className="pointer-events-auto rounded-xl p-2.5 text-muted-foreground hover:bg-secondary/80 active:scale-90 transition-all"
+            >
               <Menu className="h-5 w-5" />
             </button>
 
@@ -190,10 +257,18 @@ const Index = () => {
               >
                 <Brain className="h-5 w-5" />
               </button>
-              <button onClick={handleNewChat} className="rounded-xl p-2.5 text-muted-foreground hover:bg-secondary/80 active:scale-90 transition-all" title="Новый чат">
+              <button
+                onClick={handleNewChat}
+                className="rounded-xl p-2.5 text-muted-foreground hover:bg-secondary/80 active:scale-90 transition-all"
+                title="Новый чат"
+              >
                 <SquarePen className="h-5 w-5" />
               </button>
-              <button onClick={() => setSettingsOpen(true)} className="rounded-xl p-2.5 text-muted-foreground hover:bg-secondary/80 active:scale-90 transition-all" title="Настройки">
+              <button
+                onClick={() => setSettingsOpen(true)}
+                className="rounded-xl p-2.5 text-muted-foreground hover:bg-secondary/80 active:scale-90 transition-all"
+                title="Настройки"
+              >
                 <Settings className="h-5 w-5" />
               </button>
             </div>
@@ -201,11 +276,13 @@ const Index = () => {
         )}
 
         {/* Chat content */}
-        <div className="flex flex-1 flex-col overflow-hidden min-h-0">
+        <div className="flex flex-1 flex-col overflow-hidden min-h-0 relative">
           {displayMessages.length === 0 ? (
             <EmptyState onSuggestionClick={handleSuggestionClick} isMobile={isMobile} />
           ) : (
-            <div className={`flex-1 overflow-y-auto px-3 sm:px-4 scrollbar-thin ${isMobile ? "pt-16" : ""}`}
+            <div
+              ref={scrollContainerRef}
+              className={`flex-1 overflow-y-auto px-3 sm:px-4 scrollbar-thin ${isMobile ? "pt-16" : ""}`}
               style={isMobile ? { paddingTop: "max(64px, calc(env(safe-area-inset-top, 0px) + 56px))" } : undefined}
             >
               <div className="mx-auto max-w-3xl pb-2">
@@ -224,6 +301,17 @@ const Index = () => {
                 <div ref={messagesEndRef} />
               </div>
             </div>
+          )}
+
+          {/* Scroll to bottom button */}
+          {showScrollBtn && displayMessages.length > 0 && (
+            <button
+              onClick={scrollToBottom}
+              className="absolute bottom-[calc(100px+env(safe-area-inset-bottom,0px))] left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 rounded-full border border-border bg-background/90 backdrop-blur-sm px-3 py-1.5 text-xs text-muted-foreground shadow-lg hover:bg-secondary hover:text-foreground transition-all active:scale-95 animate-fade-in-up"
+            >
+              <ChevronDown className="h-3.5 w-3.5" />
+              <span>Вниз</span>
+            </button>
           )}
 
           <DeepSearchPanel deepSearch={deepSearch} />

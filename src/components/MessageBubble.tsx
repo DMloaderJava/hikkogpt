@@ -2,41 +2,25 @@ import { Copy, ThumbsUp, ThumbsDown, RotateCcw, Volume2, VolumeX, Pencil, Sparkl
 import { useState, useRef, useCallback } from "react";
 import type { Message } from "@/hooks/useChat";
 
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
 type VoiceState = "idle" | "loading" | "playing";
 
-// Maps our named voices to browser voice name hints
-const VOICE_LANG_MAP: Record<string, { lang: string; gender: "female" | "male" | "neutral" }> = {
-  Aoede: { lang: "ru-RU", gender: "female" },
-  Charon: { lang: "ru-RU", gender: "male" },
-  Fenrir: { lang: "ru-RU", gender: "male" },
-  Kore: { lang: "ru-RU", gender: "female" },
-  Puck: { lang: "ru-RU", gender: "neutral" },
-  Leda: { lang: "ru-RU", gender: "female" },
-};
-
-function pickBrowserVoice(voiceName: string): SpeechSynthesisVoice | null {
-  const voices = window.speechSynthesis.getVoices();
-  if (!voices.length) return null;
-  const hint = VOICE_LANG_MAP[voiceName] || { lang: "ru-RU", gender: "neutral" };
-  // Try to find a Russian voice matching the gender hint
-  const ruVoices = voices.filter(v => v.lang.startsWith("ru"));
-  if (ruVoices.length === 0) return voices[0];
-  if (hint.gender === "male") return ruVoices.find(v => /male|мужской/i.test(v.name)) || ruVoices[0];
-  if (hint.gender === "female") return ruVoices.find(v => /female|женский/i.test(v.name)) || ruVoices[0];
-  return ruVoices[0];
-}
-
-function useGeminiTTS() {
+function useTTS() {
   const [state, setState] = useState<VoiceState>("idle");
-  const uttRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const stateRef = useRef<VoiceState>("idle");
 
-  const setStateSync = (s: VoiceState) => {
-    stateRef.current = s;
-    setState(s);
-  };
+  const setS = (s: VoiceState) => { stateRef.current = s; setState(s); };
 
-  const speak = useCallback((text: string, voice = "Aoede") => {
+  const speak = useCallback(async (text: string, voice = "Aoede") => {
+    // Stop any current playback
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+
     const clean = text
       .replace(/```[\s\S]*?```/g, "код")
       .replace(/`[^`]+`/g, "")
@@ -49,43 +33,50 @@ function useGeminiTTS() {
       .replace(/\n{2,}/g, ". ")
       .replace(/\n/g, " ")
       .trim();
+
     if (!clean) return;
 
-    window.speechSynthesis.cancel();
-    setStateSync("loading");
+    setS("loading");
 
-    const utt = new SpeechSynthesisUtterance(clean.slice(0, 4000));
-    utt.lang = "ru-RU";
-    utt.rate = 1.0;
-    utt.pitch = 1.0;
+    try {
+      const resp = await fetch(`${SUPABASE_URL}/functions/v1/gemini-tts`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        },
+        body: JSON.stringify({ text: clean, voice }),
+      });
 
-    const doSpeak = () => {
-      const browserVoice = pickBrowserVoice(voice);
-      if (browserVoice) utt.voice = browserVoice;
-      utt.onstart = () => setStateSync("playing");
-      utt.onend = () => setStateSync("idle");
-      utt.onerror = () => setStateSync("idle");
-      uttRef.current = utt;
-      window.speechSynthesis.speak(utt);
-    };
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        console.error("TTS error:", err.error || resp.status);
+        setS("idle");
+        return;
+      }
 
-    if (window.speechSynthesis.getVoices().length > 0) {
-      doSpeak();
-    } else {
-      window.speechSynthesis.onvoiceschanged = () => {
-        window.speechSynthesis.onvoiceschanged = null;
-        doSpeak();
-      };
-      setTimeout(() => {
-        if (stateRef.current === "loading") doSpeak();
-      }, 600);
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audioRef.current = audio;
+
+      audio.onplay = () => setS("playing");
+      audio.onended = () => { URL.revokeObjectURL(url); audioRef.current = null; setS("idle"); };
+      audio.onerror = () => { URL.revokeObjectURL(url); audioRef.current = null; setS("idle"); };
+
+      await audio.play();
+    } catch (e) {
+      console.error("TTS fetch error:", e);
+      setS("idle");
     }
   }, []);
 
   const stop = useCallback(() => {
-    window.speechSynthesis.cancel();
-    uttRef.current = null;
-    setStateSync("idle");
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    setS("idle");
   }, []);
 
   return { state, speak, stop };
@@ -94,22 +85,15 @@ function useGeminiTTS() {
 // Image grid: 1 → full width, 2 → side by side, 3 → 2+1, 4+ → 2×2 grid
 function ImageGrid({ images }: { images: string[] }) {
   const [lightbox, setLightbox] = useState<string | null>(null);
-
   if (images.length === 0) return null;
-
-  const gridClass =
-    images.length === 1
-      ? "grid grid-cols-1"
-      : images.length === 2
-      ? "grid grid-cols-2 gap-1"
-      : "grid grid-cols-2 gap-1";
 
   const visibleImages = images.slice(0, 4);
   const extra = images.length > 4 ? images.length - 4 : 0;
+  const gridClass = images.length === 1 ? "grid grid-cols-1" : "grid grid-cols-2 gap-1";
 
   return (
     <>
-      <div className={`mb-2 ${gridClass} rounded-xl overflow-hidden max-w-xs sm:max-w-sm`}>
+      <div className={`${gridClass} rounded-xl overflow-hidden max-w-xs sm:max-w-sm`}>
         {visibleImages.map((src, i) => (
           <div
             key={i}
@@ -119,10 +103,9 @@ function ImageGrid({ images }: { images: string[] }) {
             <img
               src={src}
               alt={`Attached ${i + 1}`}
-              className={`w-full h-full object-cover cursor-pointer hover:opacity-90 transition-opacity ${
-                images.length === 1 ? "max-h-64 object-contain" : ""
-              }`}
+              className={`w-full h-full object-cover cursor-pointer hover:opacity-90 transition-opacity ${images.length === 1 ? "max-h-64 object-contain" : ""}`}
               onClick={() => setLightbox(src)}
+              loading="lazy"
             />
             {i === 3 && extra > 0 && (
               <div className="absolute inset-0 flex items-center justify-center bg-background/70 backdrop-blur-sm">
@@ -133,7 +116,6 @@ function ImageGrid({ images }: { images: string[] }) {
         ))}
       </div>
 
-      {/* Lightbox */}
       {lightbox && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-background/90 backdrop-blur-sm p-4"
@@ -143,9 +125,7 @@ function ImageGrid({ images }: { images: string[] }) {
           <button
             className="absolute right-4 top-4 rounded-full bg-secondary p-2 text-foreground"
             onClick={() => setLightbox(null)}
-          >
-            ✕
-          </button>
+          >✕</button>
         </div>
       )}
     </>
@@ -156,6 +136,25 @@ interface MessageBubbleProps {
   message: Message;
   isStreaming?: boolean;
   ttsVoice?: string;
+}
+
+// Extract inline images from markdown content, returns {text, images}
+function extractInlineImages(content: string): { text: string; images: { src: string; alt: string }[] } {
+  const images: { src: string; alt: string }[] = [];
+  // Remove source sections (---\n**Источники:**...) completely
+  const withoutSources = content
+    .replace(/\n*---\n+\*\*Источники:\*\*[\s\S]*$/m, "")
+    .replace(/\n*---\n+\*\*Sources:\*\*[\s\S]*$/m, "");
+
+  // Extract all markdown images
+  const text = withoutSources.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, src) => {
+    images.push({ src, alt });
+    return ""; // remove from text
+  });
+
+  // Clean up trailing blank lines
+  const cleanText = text.replace(/\n{3,}/g, "\n\n").trim();
+  return { text: cleanText, images };
 }
 
 function renderContent(content: string) {
@@ -197,38 +196,30 @@ function renderContent(content: string) {
     }
     if (inCodeBlock) { codeLines.push(line); return; }
 
-    const imgMatch = line.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
-    if (imgMatch) {
-      parts.push(<img key={key++} src={imgMatch[2]} alt={imgMatch[1]} className="my-3 max-w-full rounded-lg" loading="lazy" />);
-      return;
-    }
+    // Skip standalone image lines (handled separately at bottom)
+    if (/^!\[[^\]]*\]\([^)]+\)$/.test(line.trim())) return;
 
     let processed: React.ReactNode = line;
 
+    // Bold
     if (line.includes("**")) {
       const segs = line.split(/\*\*(.*?)\*\*/g);
       processed = segs.map((s, i) => i % 2 === 1 ? <strong key={i}>{s}</strong> : s);
     }
 
+    // Inline code
     if (typeof processed === "string" && processed.includes("`")) {
       const segs = processed.split(/`([^`]+)`/g);
       processed = segs.map((s, i) =>
-        i % 2 === 1 ? <code key={i} className="rounded bg-code-block px-1.5 py-0.5 text-xs sm:text-sm text-code-block-foreground">{s}</code> : s
+        i % 2 === 1
+          ? <code key={i} className="rounded bg-code-block px-1.5 py-0.5 text-xs sm:text-sm text-code-block-foreground">{s}</code>
+          : s
       );
     }
 
+    // Inline links — render as plain text (no clickable links to keep chat clean)
     if (typeof processed === "string" && processed.includes("](")) {
-      const linkRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
-      const segments: React.ReactNode[] = [];
-      let lastIndex = 0;
-      let match;
-      while ((match = linkRegex.exec(processed)) !== null) {
-        if (match.index > lastIndex) segments.push(processed.slice(lastIndex, match.index));
-        segments.push(<a key={match.index} href={match[2]} target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2 hover:opacity-80 transition-opacity break-all">{match[1]}</a>);
-        lastIndex = match.index + match[0].length;
-      }
-      if (lastIndex < processed.length) segments.push(processed.slice(lastIndex));
-      processed = segments;
+      processed = processed.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
     }
 
     if (line.startsWith("### ")) parts.push(<h3 key={key++} className="mt-4 mb-1.5 text-sm sm:text-base font-semibold text-foreground">{line.slice(4)}</h3>);
@@ -252,7 +243,7 @@ export function MessageBubble({ message, isStreaming, ttsVoice = "Aoede" }: Mess
   const [liked, setLiked] = useState<boolean | null>(null);
   const isUser = message.role === "user";
 
-  const { state: ttsState, speak, stop: stopSpeaking } = useGeminiTTS();
+  const { state: ttsState, speak, stop: stopSpeaking } = useTTS();
   const isSpeaking = ttsState === "playing" || ttsState === "loading";
 
   const handleCopy = useCallback(() => {
@@ -266,7 +257,14 @@ export function MessageBubble({ message, isStreaming, ttsVoice = "Aoede" }: Mess
     else speak(message.content, ttsVoice);
   }, [isSpeaking, speak, stopSpeaking, message.content, ttsVoice]);
 
-  const allImages = message.images || (message.image_url ? [message.image_url] : []);
+  const userImages = message.images || (message.image_url ? [message.image_url] : []);
+
+  // For assistant messages: extract inline images and strip source links
+  const { text: cleanContent, images: inlineImages } = !isUser
+    ? extractInlineImages(message.content)
+    : { text: message.content, images: [] };
+
+  const displayContent = isUser ? message.content : cleanContent;
 
   return (
     <div className={`animate-fade-in-up py-2 sm:py-3 ${isUser ? "flex justify-end" : ""}`}>
@@ -279,10 +277,10 @@ export function MessageBubble({ message, isStreaming, ttsVoice = "Aoede" }: Mess
         )}
 
         <div className={`flex-1 min-w-0 ${isUser ? "text-right" : ""}`}>
-          {/* Image grid for user */}
-          {isUser && allImages.length > 0 && (
+          {/* User-attached images */}
+          {isUser && userImages.length > 0 && (
             <div className="mb-2 flex justify-end">
-              <ImageGrid images={allImages} />
+              <ImageGrid images={userImages} />
             </div>
           )}
 
@@ -320,7 +318,7 @@ export function MessageBubble({ message, isStreaming, ttsVoice = "Aoede" }: Mess
                 </div>
               ) : (
                 <>
-                  {renderContent(message.content)}
+                  {renderContent(displayContent)}
                   {isStreaming && !isUser && (
                     <span className="inline-block w-1.5 h-4 sm:h-5 bg-foreground ml-0.5 animate-blink" />
                   )}
@@ -328,6 +326,13 @@ export function MessageBubble({ message, isStreaming, ttsVoice = "Aoede" }: Mess
               )}
             </div>
           </div>
+
+          {/* Inline images at the BOTTOM of assistant message */}
+          {!isUser && inlineImages.length > 0 && !isStreaming && (
+            <div className="mt-3">
+              <ImageGrid images={inlineImages.map(i => i.src)} />
+            </div>
+          )}
 
           {/* Action bar for assistant messages */}
           {!isUser && !isStreaming && message.content && (
