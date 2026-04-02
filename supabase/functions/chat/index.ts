@@ -19,7 +19,7 @@ serve(async (req) => {
     const modelMap: Record<string, string> = {
       "HikkoGPT": "google/gemini-3.1-pro-preview",
       "Илья": "google/gemini-3-flash-preview",
-      "HikkoGPT Turbo": "google/gemini-3.1-flash-lite-preview",
+      "HikkoGPT Turbo": "google/gemini-3-flash-preview",
       "Илон Маск": "google/gemini-3.1-pro-preview",
       "Прохожий0": "google/gemini-3.1-pro-preview",
     };
