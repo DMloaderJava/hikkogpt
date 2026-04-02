@@ -157,6 +157,93 @@ function extractInlineImages(content: string): { text: string; images: { src: st
   return { text: cleanText, images };
 }
 
+// Parse inline markdown: bold, italic, bold+italic, inline code, strikethrough, links
+function parseInline(text: string): React.ReactNode[] {
+  // Order matters: bold+italic first, then bold, italic, strikethrough, inline code, links
+  const regex = /(\*\*\*(.*?)\*\*\*|\*\*(.*?)\*\*|\*(.*?)\*|~~(.*?)~~|`([^`]+)`|\[([^\]]+)\]\(([^)]+)\))/g;
+  const nodes: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  let ki = 0;
+
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      nodes.push(text.slice(lastIndex, match.index));
+    }
+    if (match[2] !== undefined) {
+      // ***bold italic***
+      nodes.push(<strong key={ki}><em>{match[2]}</em></strong>);
+    } else if (match[3] !== undefined) {
+      // **bold**
+      nodes.push(<strong key={ki}>{match[3]}</strong>);
+    } else if (match[4] !== undefined) {
+      // *italic*
+      nodes.push(<em key={ki}>{match[4]}</em>);
+    } else if (match[5] !== undefined) {
+      // ~~strikethrough~~
+      nodes.push(<del key={ki} className="text-muted-foreground">{match[5]}</del>);
+    } else if (match[6] !== undefined) {
+      // `inline code`
+      nodes.push(
+        <code key={ki} className="rounded bg-code-block px-1.5 py-0.5 text-xs sm:text-sm text-code-block-foreground">
+          {match[6]}
+        </code>
+      );
+    } else if (match[7] !== undefined && match[8] !== undefined) {
+      // [text](url) — render as plain text (no clickable links)
+      nodes.push(match[7]);
+    }
+    ki++;
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (lastIndex < text.length) {
+    nodes.push(text.slice(lastIndex));
+  }
+
+  return nodes.length > 0 ? nodes : [text];
+}
+
+// Parse markdown table block
+function renderTable(tableLines: string[], startKey: number): { node: React.ReactNode; key: number } {
+  let key = startKey;
+  const headerCells = tableLines[0].split("|").map(c => c.trim()).filter(Boolean);
+  const bodyRows = tableLines.slice(2); // skip header and separator
+
+  return {
+    node: (
+      <div key={key++} className="my-3 overflow-x-auto rounded-lg border border-border">
+        <table className="w-full text-xs sm:text-sm">
+          <thead>
+            <tr className="border-b border-border bg-secondary/50">
+              {headerCells.map((cell, i) => (
+                <th key={i} className="px-3 py-2 text-left font-semibold text-foreground whitespace-nowrap">
+                  {parseInline(cell)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {bodyRows.map((row, ri) => {
+              const cells = row.split("|").map(c => c.trim()).filter(Boolean);
+              return (
+                <tr key={ri} className="border-b border-border last:border-0 hover:bg-secondary/30 transition-colors">
+                  {cells.map((cell, ci) => (
+                    <td key={ci} className="px-3 py-2 text-foreground">
+                      {parseInline(cell)}
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    ),
+    key,
+  };
+}
+
 function renderContent(content: string) {
   const parts: React.ReactNode[] = [];
   const lines = content.split("\n");
@@ -188,50 +275,71 @@ function renderContent(content: string) {
     codeLang = "";
   };
 
-  lines.forEach((line) => {
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+
     if (line.startsWith("```")) {
       if (inCodeBlock) { flushCode(); inCodeBlock = false; }
       else { inCodeBlock = true; codeLang = line.slice(3).trim(); }
-      return;
+      i++;
+      continue;
     }
-    if (inCodeBlock) { codeLines.push(line); return; }
+    if (inCodeBlock) { codeLines.push(line); i++; continue; }
 
-    // Skip standalone image lines (handled separately at bottom)
-    if (/^!\[[^\]]*\]\([^)]+\)$/.test(line.trim())) return;
+    // Skip standalone image lines
+    if (/^!\[[^\]]*\]\([^)]+\)$/.test(line.trim())) { i++; continue; }
 
-    let processed: React.ReactNode = line;
-
-    // Bold
-    if (line.includes("**")) {
-      const segs = line.split(/\*\*(.*?)\*\*/g);
-      processed = segs.map((s, i) => i % 2 === 1 ? <strong key={i}>{s}</strong> : s);
-    }
-
-    // Inline code
-    if (typeof processed === "string" && processed.includes("`")) {
-      const segs = processed.split(/`([^`]+)`/g);
-      processed = segs.map((s, i) =>
-        i % 2 === 1
-          ? <code key={i} className="rounded bg-code-block px-1.5 py-0.5 text-xs sm:text-sm text-code-block-foreground">{s}</code>
-          : s
-      );
+    // Table detection: current line has |, next line is separator (|---|)
+    if (line.includes("|") && i + 1 < lines.length && /^\|?\s*[-:]+[-|\s:]*$/.test(lines[i + 1])) {
+      const tableLines: string[] = [line, lines[i + 1]];
+      let j = i + 2;
+      while (j < lines.length && lines[j].includes("|") && lines[j].trim() !== "") {
+        tableLines.push(lines[j]);
+        j++;
+      }
+      const result = renderTable(tableLines, key);
+      parts.push(result.node);
+      key = result.key;
+      i = j;
+      continue;
     }
 
-    // Inline links — render as plain text (no clickable links to keep chat clean)
-    if (typeof processed === "string" && processed.includes("](")) {
-      processed = processed.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
+    // Headings
+    if (line.startsWith("### ")) {
+      parts.push(<h3 key={key++} className="mt-4 mb-1.5 text-sm sm:text-base font-semibold text-foreground">{parseInline(line.slice(4))}</h3>);
+    } else if (line.startsWith("## ")) {
+      parts.push(<h2 key={key++} className="mt-4 sm:mt-5 mb-1.5 sm:mb-2 text-base sm:text-lg font-bold text-foreground">{parseInline(line.slice(3))}</h2>);
+    } else if (line.startsWith("# ")) {
+      parts.push(<h1 key={key++} className="mt-4 sm:mt-5 mb-1.5 sm:mb-2 text-lg sm:text-xl font-bold text-foreground">{parseInline(line.slice(2))}</h1>);
+    }
+    // Unordered list
+    else if (line.startsWith("- ") || line.startsWith("* ")) {
+      parts.push(<li key={key++} className="ml-4 sm:ml-5 list-disc leading-relaxed text-sm sm:text-[15px]">{parseInline(line.slice(2))}</li>);
+    }
+    // Ordered list
+    else if (/^\d+\.\s/.test(line)) {
+      parts.push(<li key={key++} className="ml-4 sm:ml-5 list-decimal leading-relaxed text-sm sm:text-[15px]">{parseInline(line.replace(/^\d+\.\s/, ""))}</li>);
+    }
+    // Blockquote
+    else if (line.startsWith("> ")) {
+      parts.push(<blockquote key={key++} className="my-2 border-l-2 border-muted-foreground/40 pl-3 sm:pl-4 italic text-muted-foreground text-xs sm:text-sm">{parseInline(line.slice(2))}</blockquote>);
+    }
+    // Horizontal rule
+    else if (line === "---" || line === "***") {
+      parts.push(<hr key={key++} className="my-3 border-border" />);
+    }
+    // Empty line
+    else if (line === "") {
+      parts.push(<br key={key++} />);
+    }
+    // Normal paragraph
+    else {
+      parts.push(<p key={key++} className="my-0.5 leading-relaxed text-sm sm:text-[15px]">{parseInline(line)}</p>);
     }
 
-    if (line.startsWith("### ")) parts.push(<h3 key={key++} className="mt-4 mb-1.5 text-sm sm:text-base font-semibold text-foreground">{line.slice(4)}</h3>);
-    else if (line.startsWith("## ")) parts.push(<h2 key={key++} className="mt-4 sm:mt-5 mb-1.5 sm:mb-2 text-base sm:text-lg font-bold text-foreground">{line.slice(3)}</h2>);
-    else if (line.startsWith("# ")) parts.push(<h1 key={key++} className="mt-4 sm:mt-5 mb-1.5 sm:mb-2 text-lg sm:text-xl font-bold text-foreground">{line.slice(2)}</h1>);
-    else if (line.startsWith("- ") || line.startsWith("* ")) parts.push(<li key={key++} className="ml-4 sm:ml-5 list-disc leading-relaxed text-sm sm:text-[15px]">{typeof processed === "string" ? line.slice(2) : <>{Array.isArray(processed) ? processed : line.slice(2)}</>}</li>);
-    else if (/^\d+\.\s/.test(line)) parts.push(<li key={key++} className="ml-4 sm:ml-5 list-decimal leading-relaxed text-sm sm:text-[15px]">{typeof processed === "string" ? line.replace(/^\d+\.\s/, "") : processed}</li>);
-    else if (line.startsWith("> ")) parts.push(<blockquote key={key++} className="my-2 border-l-2 border-muted-foreground/40 pl-3 sm:pl-4 italic text-muted-foreground text-xs sm:text-sm">{line.slice(2)}</blockquote>);
-    else if (line === "---" || line === "***") parts.push(<hr key={key++} className="my-3 border-border" />);
-    else if (line === "") parts.push(<br key={key++} />);
-    else parts.push(<p key={key++} className="my-0.5 leading-relaxed text-sm sm:text-[15px]">{processed}</p>);
-  });
+    i++;
+  }
 
   if (inCodeBlock) flushCode();
   return parts;
