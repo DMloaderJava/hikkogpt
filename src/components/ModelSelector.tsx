@@ -48,8 +48,11 @@ export function ModelSelector({ selectedModel, onSelect }: ModelSelectorProps) {
 
       {open && (
         <div
-          className="fixed sm:absolute left-1/2 sm:left-0 -translate-x-1/2 sm:translate-x-0 top-auto sm:top-full z-[100] mt-2 w-[280px] sm:w-64 rounded-2xl border border-border bg-popover p-1.5 shadow-xl"
-          style={{ top: ref.current ? ref.current.getBoundingClientRect().bottom + 8 : undefined }}
+          className="fixed left-1/2 -translate-x-1/2 sm:left-auto sm:translate-x-0 z-[100] w-[280px] sm:w-64 rounded-2xl border border-border bg-popover p-1.5 shadow-xl"
+          style={{
+            top: ref.current ? ref.current.getBoundingClientRect().bottom + 8 : 0,
+            ...(window.innerWidth >= 640 ? { left: ref.current?.getBoundingClientRect().left } : {}),
+          }}
           onClick={(e) => e.stopPropagation()}
         >
           <p className="px-3 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Модели</p>
