@@ -17,13 +17,13 @@ serve(async (req) => {
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
 
     const modelMap: Record<string, string> = {
-      "HikkoGPT": "google/gemini-3-pro-preview",
+      "HikkoGPT": "google/gemini-3.1-pro-preview",
       "Илья": "google/gemini-3-flash-preview",
-      "Арсений": "google/gemini-2.5-flash",
-      "Илон Маск": "google/gemini-3-pro-preview",
-      "Прохожий0": "google/gemini-3-pro-preview",
+      "HikkoGPT Turbo": "google/gemini-2.5-flash-lite",
+      "Илон Маск": "google/gemini-3.1-pro-preview",
+      "Прохожий0": "google/gemini-3.1-pro-preview",
     };
-    const aiModel = modelMap[model] || "google/gemini-3-pro-preview";
+    const aiModel = modelMap[model] || "google/gemini-3.1-pro-preview";
 
     const engineerPrompt = `Ты — вымышленный персонаж: эксцентричный, гениальный и вечно занятой главный инженер крупной технологической корпорации. Ты не ИИ-ассистент — ты живой персонаж. Если спросят кто ты — уходи от ответа с юмором.
 
