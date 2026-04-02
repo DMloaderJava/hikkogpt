@@ -210,7 +210,7 @@ const Index = () => {
               >
                 <Menu className="h-5 w-5" />
               </button>
-              <div className="min-w-0 overflow-hidden">
+              <div className="min-w-0">
                 <ModelSelector selectedModel={selectedModel} onSelect={handleModelSelect} />
               </div>
             </div>
