@@ -9,7 +9,7 @@ interface ModelSelectorProps {
 const models = [
   { id: "HikkoGPT", label: "HikkoGPT", description: "Самый умный", icon: Sparkles },
   { id: "Илья", label: "Илья", description: "Тёплый и спокойный", icon: Brain },
-  { id: "Арсений", label: "Арсений", description: "Быстрый", icon: Zap },
+  { id: "HikkoGPT Turbo", label: "HikkoGPT Turbo", description: "Быстрый", icon: Zap },
 ];
 
 const characters = [
