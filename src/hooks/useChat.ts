@@ -32,24 +32,32 @@ async function resolveImageSearchTags(text: string): Promise<string> {
   const matches = [...text.matchAll(tagRegex)];
   if (matches.length === 0) return text;
 
+  // Resolve all image searches in parallel
+  const results = await Promise.allSettled(
+    matches.map(async (match) => {
+      const query = match[1].trim();
+      try {
+        const resp = await fetch(IMAGE_SEARCH_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+          body: JSON.stringify({ query }),
+        });
+        if (!resp.ok) return { match: match[0], replacement: "" };
+        const data = await resp.json();
+        const imgs: { url: string; title: string }[] = data.results || [];
+        if (imgs.length === 0) return { match: match[0], replacement: "" };
+        const mdImages = imgs.slice(0, 3).map(img => `![${img.title || query}](${img.url})`).join("\n");
+        return { match: match[0], replacement: `\n${mdImages}\n` };
+      } catch {
+        return { match: match[0], replacement: "" };
+      }
+    })
+  );
+
   let result = text;
-  for (const match of matches) {
-    const query = match[1].trim();
-    try {
-      const resp = await fetch(IMAGE_SEARCH_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
-        body: JSON.stringify({ query }),
-      });
-      if (!resp.ok) { result = result.replace(match[0], ""); continue; }
-      const data = await resp.json();
-      const imgs: { url: string; title: string }[] = data.results || [];
-      if (imgs.length === 0) { result = result.replace(match[0], ""); continue; }
-      // Take up to 3 images, render as markdown
-      const mdImages = imgs.slice(0, 3).map(img => `![${img.title || query}](${img.url})`).join("\n");
-      result = result.replace(match[0], `\n${mdImages}\n`);
-    } catch {
-      result = result.replace(match[0], "");
+  for (const r of results) {
+    if (r.status === "fulfilled") {
+      result = result.replace(r.value.match, r.value.replacement);
     }
   }
   return result;
