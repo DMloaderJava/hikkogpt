@@ -219,20 +219,8 @@ export function useChat() {
       // Use first image for DB storage (legacy single image_url column)
       const firstImage = images?.[0] || null;
 
-      // Insert user message to DB
-      const { data: userMsgData } = await supabase
-        .from("messages")
-        .insert({
-          chat_id: chatId,
-          role: "user",
-          content,
-          image_url: firstImage,
-        })
-        .select()
-        .single();
-
       const userMessage: Message = {
-        id: userMsgData?.id || crypto.randomUUID(),
+        id: crypto.randomUUID(),
         role: "user",
         content,
         image_url: firstImage || undefined,
@@ -240,19 +228,23 @@ export function useChat() {
         timestamp: new Date(),
       };
 
-      // Update title if first message
+      // Update UI immediately, DB writes in background
       const isFirst = existingMessages.length === 0;
-      if (isFirst) {
-        const title = content.slice(0, 30) + (content.length > 30 ? "..." : "");
-        await supabase.from("chats").update({ title }).eq("id", chatId);
-        setChats((prev) =>
-          prev.map((c) => (c.id === chatId ? { ...c, title, messages: [...c.messages, userMessage], updatedAt: new Date() } : c))
-        );
-      } else {
-        setChats((prev) =>
-          prev.map((c) => (c.id === chatId ? { ...c, messages: [...c.messages, userMessage], updatedAt: new Date() } : c))
-        );
-      }
+      const title = isFirst ? content.slice(0, 30) + (content.length > 30 ? "..." : "") : undefined;
+
+      setChats((prev) =>
+        prev.map((c) =>
+          c.id === chatId
+            ? { ...c, ...(title ? { title } : {}), messages: [...c.messages, userMessage], updatedAt: new Date() }
+            : c
+        )
+      );
+
+      // Fire DB writes in parallel, don't await them before streaming
+      const dbWrites = Promise.all([
+        supabase.from("messages").insert({ chat_id: chatId, role: "user", content, image_url: firstImage }),
+        ...(title ? [supabase.from("chats").update({ title }).eq("id", chatId)] : []),
+      ]);
 
       // Build API messages (support multiple images)
       const apiMessages = [
