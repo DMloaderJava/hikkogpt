@@ -67,7 +67,7 @@ export function useChat() {
 
   const activeChat = chats.find((c) => c.id === activeChatId) || null;
 
-  // Load chats from DB on mount
+  // Load chats list (without messages) on mount
   useEffect(() => {
     if (!user || loadedRef.current) return;
     loadedRef.current = true;
@@ -81,32 +81,56 @@ export function useChat() {
 
       if (error || !dbChats) return;
 
-      const chatList: Chat[] = [];
-      for (const c of dbChats) {
-        const { data: msgs } = await supabase
-          .from("messages")
-          .select("*")
-          .eq("chat_id", c.id)
-          .order("created_at", { ascending: true });
-
-        chatList.push({
-          id: c.id,
-          title: c.title,
-          model: c.model,
-          messages: (msgs || []).map((m: any) => ({
-            id: m.id,
-            role: m.role,
-            content: m.content,
-            image_url: m.image_url || undefined,
-            timestamp: new Date(m.created_at),
-          })),
-          createdAt: new Date(c.created_at),
-          updatedAt: new Date(c.updated_at),
-        });
-      }
+      const chatList: Chat[] = dbChats.map((c) => ({
+        id: c.id,
+        title: c.title,
+        model: c.model,
+        messages: [],
+        createdAt: new Date(c.created_at),
+        updatedAt: new Date(c.updated_at),
+      }));
       setChats(chatList);
     })();
   }, [user]);
+
+  // Load messages only when a chat is selected
+  const loadingMsgsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!activeChatId || !user) return;
+    const chat = chats.find((c) => c.id === activeChatId);
+    // Skip if messages already loaded or currently loading
+    if (!chat || chat.messages.length > 0 || loadingMsgsRef.current.has(activeChatId)) return;
+
+    loadingMsgsRef.current.add(activeChatId);
+    const chatId = activeChatId;
+
+    (async () => {
+      const { data: msgs } = await supabase
+        .from("messages")
+        .select("*")
+        .eq("chat_id", chatId)
+        .order("created_at", { ascending: true });
+
+      setChats((prev) =>
+        prev.map((c) =>
+          c.id === chatId
+            ? {
+                ...c,
+                messages: (msgs || []).map((m: any) => ({
+                  id: m.id,
+                  role: m.role,
+                  content: m.content,
+                  image_url: m.image_url || undefined,
+                  timestamp: new Date(m.created_at),
+                })),
+              }
+            : c
+        )
+      );
+      loadingMsgsRef.current.delete(chatId);
+    })();
+  }, [activeChatId, user, chats]);
 
   const createNewChat = useCallback(async () => {
     if (!user) return "";
