@@ -32,24 +32,32 @@ async function resolveImageSearchTags(text: string): Promise<string> {
   const matches = [...text.matchAll(tagRegex)];
   if (matches.length === 0) return text;
 
+  // Resolve all image searches in parallel
+  const results = await Promise.allSettled(
+    matches.map(async (match) => {
+      const query = match[1].trim();
+      try {
+        const resp = await fetch(IMAGE_SEARCH_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+          body: JSON.stringify({ query }),
+        });
+        if (!resp.ok) return { match: match[0], replacement: "" };
+        const data = await resp.json();
+        const imgs: { url: string; title: string }[] = data.results || [];
+        if (imgs.length === 0) return { match: match[0], replacement: "" };
+        const mdImages = imgs.slice(0, 3).map(img => `![${img.title || query}](${img.url})`).join("\n");
+        return { match: match[0], replacement: `\n${mdImages}\n` };
+      } catch {
+        return { match: match[0], replacement: "" };
+      }
+    })
+  );
+
   let result = text;
-  for (const match of matches) {
-    const query = match[1].trim();
-    try {
-      const resp = await fetch(IMAGE_SEARCH_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
-        body: JSON.stringify({ query }),
-      });
-      if (!resp.ok) { result = result.replace(match[0], ""); continue; }
-      const data = await resp.json();
-      const imgs: { url: string; title: string }[] = data.results || [];
-      if (imgs.length === 0) { result = result.replace(match[0], ""); continue; }
-      // Take up to 3 images, render as markdown
-      const mdImages = imgs.slice(0, 3).map(img => `![${img.title || query}](${img.url})`).join("\n");
-      result = result.replace(match[0], `\n${mdImages}\n`);
-    } catch {
-      result = result.replace(match[0], "");
+  for (const r of results) {
+    if (r.status === "fulfilled") {
+      result = result.replace(r.value.match, r.value.replacement);
     }
   }
   return result;
@@ -211,20 +219,8 @@ export function useChat() {
       // Use first image for DB storage (legacy single image_url column)
       const firstImage = images?.[0] || null;
 
-      // Insert user message to DB
-      const { data: userMsgData } = await supabase
-        .from("messages")
-        .insert({
-          chat_id: chatId,
-          role: "user",
-          content,
-          image_url: firstImage,
-        })
-        .select()
-        .single();
-
       const userMessage: Message = {
-        id: userMsgData?.id || crypto.randomUUID(),
+        id: crypto.randomUUID(),
         role: "user",
         content,
         image_url: firstImage || undefined,
@@ -232,19 +228,23 @@ export function useChat() {
         timestamp: new Date(),
       };
 
-      // Update title if first message
+      // Update UI immediately, DB writes in background
       const isFirst = existingMessages.length === 0;
-      if (isFirst) {
-        const title = content.slice(0, 30) + (content.length > 30 ? "..." : "");
-        await supabase.from("chats").update({ title }).eq("id", chatId);
-        setChats((prev) =>
-          prev.map((c) => (c.id === chatId ? { ...c, title, messages: [...c.messages, userMessage], updatedAt: new Date() } : c))
-        );
-      } else {
-        setChats((prev) =>
-          prev.map((c) => (c.id === chatId ? { ...c, messages: [...c.messages, userMessage], updatedAt: new Date() } : c))
-        );
-      }
+      const title = isFirst ? content.slice(0, 30) + (content.length > 30 ? "..." : "") : undefined;
+
+      setChats((prev) =>
+        prev.map((c) =>
+          c.id === chatId
+            ? { ...c, ...(title ? { title } : {}), messages: [...c.messages, userMessage], updatedAt: new Date() }
+            : c
+        )
+      );
+
+      // Fire DB writes in parallel, don't await them before streaming
+      const dbWrites = Promise.all([
+        supabase.from("messages").insert({ chat_id: chatId, role: "user", content, image_url: firstImage }),
+        ...(title ? [supabase.from("chats").update({ title }).eq("id", chatId)] : []),
+      ]);
 
       // Build API messages (support multiple images)
       const apiMessages = [
@@ -426,15 +426,12 @@ export function useChat() {
           );
         }
 
-        // Save assistant message to DB
-        await supabase.from("messages").insert({
-          chat_id: chatId,
-          role: "assistant",
-          content: assistantSoFar,
-        });
-
-        // Update chat updated_at
-        await supabase.from("chats").update({ updated_at: new Date().toISOString() }).eq("id", chatId);
+        // Ensure earlier DB writes finished, then save assistant message in parallel with updated_at
+        await dbWrites;
+        Promise.all([
+          supabase.from("messages").insert({ chat_id: chatId, role: "assistant", content: assistantSoFar }),
+          supabase.from("chats").update({ updated_at: new Date().toISOString() }).eq("id", chatId),
+        ]);
       } catch (e: unknown) {
         if (e instanceof DOMException && e.name === "AbortError") {
           // User stopped
