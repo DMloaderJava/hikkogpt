@@ -15,7 +15,6 @@ function useTTS() {
   const setS = (s: VoiceState) => { stateRef.current = s; setState(s); };
 
   const speak = useCallback(async (text: string, voice = "Aoede") => {
-    // Stop any current playback
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current = null;
@@ -82,7 +81,6 @@ function useTTS() {
   return { state, speak, stop };
 }
 
-// Image grid: 1 → full width, 2 → side by side, 3 → 2+1, 4+ → 2×2 grid
 function ImageGrid({ images }: { images: string[] }) {
   const [lightbox, setLightbox] = useState<string | null>(null);
   if (images.length === 0) return null;
@@ -93,7 +91,7 @@ function ImageGrid({ images }: { images: string[] }) {
 
   return (
     <>
-      <div className={`${gridClass} rounded-xl overflow-hidden max-w-xs sm:max-w-sm`}>
+      <div className={`${gridClass} rounded-xl overflow-hidden max-w-xs sm:max-w-sm animate-fade-in-up`}>
         {visibleImages.map((src, i) => (
           <div
             key={i}
@@ -103,7 +101,7 @@ function ImageGrid({ images }: { images: string[] }) {
             <img
               src={src}
               alt={`Attached ${i + 1}`}
-              className={`w-full h-full object-cover cursor-pointer hover:opacity-90 transition-opacity ${images.length === 1 ? "max-h-64 object-contain" : ""}`}
+              className={`w-full h-full object-cover cursor-pointer hover:opacity-90 hover:scale-[1.02] transition-all duration-200 ${images.length === 1 ? "max-h-64 object-contain" : ""}`}
               onClick={() => setLightbox(src)}
               loading="lazy"
             />
@@ -118,12 +116,12 @@ function ImageGrid({ images }: { images: string[] }) {
 
       {lightbox && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-background/90 backdrop-blur-sm p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-background/90 backdrop-blur-sm p-4 animate-fade-in"
           onClick={() => setLightbox(null)}
         >
-          <img src={lightbox} alt="Full" className="max-w-full max-h-full rounded-xl object-contain shadow-2xl" />
+          <img src={lightbox} alt="Full" className="max-w-full max-h-full rounded-xl object-contain shadow-2xl animate-scale-in" />
           <button
-            className="absolute right-4 top-4 rounded-full bg-secondary p-2 text-foreground"
+            className="absolute right-4 top-4 rounded-full bg-secondary p-2 text-foreground btn-interactive transition-all"
             onClick={() => setLightbox(null)}
           >✕</button>
         </div>
@@ -138,28 +136,22 @@ interface MessageBubbleProps {
   ttsVoice?: string;
 }
 
-// Extract inline images from markdown content, returns {text, images}
 function extractInlineImages(content: string): { text: string; images: { src: string; alt: string }[] } {
   const images: { src: string; alt: string }[] = [];
-  // Remove source sections (---\n**Источники:**...) completely
   const withoutSources = content
     .replace(/\n*---\n+\*\*Источники:\*\*[\s\S]*$/m, "")
     .replace(/\n*---\n+\*\*Sources:\*\*[\s\S]*$/m, "");
 
-  // Extract all markdown images
   const text = withoutSources.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, src) => {
     images.push({ src, alt });
-    return ""; // remove from text
+    return "";
   });
 
-  // Clean up trailing blank lines
   const cleanText = text.replace(/\n{3,}/g, "\n\n").trim();
   return { text: cleanText, images };
 }
 
-// Parse inline markdown: bold, italic, bold+italic, inline code, strikethrough, links
 function parseInline(text: string): React.ReactNode[] {
-  // Order matters: bold+italic first, then bold, italic, strikethrough, inline code, links
   const regex = /(\*\*\*(.*?)\*\*\*|\*\*(.*?)\*\*|\*(.*?)\*|~~(.*?)~~|`([^`]+)`|\[([^\]]+)\]\(([^)]+)\))/g;
   const nodes: React.ReactNode[] = [];
   let lastIndex = 0;
@@ -171,26 +163,20 @@ function parseInline(text: string): React.ReactNode[] {
       nodes.push(text.slice(lastIndex, match.index));
     }
     if (match[2] !== undefined) {
-      // ***bold italic***
       nodes.push(<strong key={ki}><em>{match[2]}</em></strong>);
     } else if (match[3] !== undefined) {
-      // **bold**
       nodes.push(<strong key={ki}>{match[3]}</strong>);
     } else if (match[4] !== undefined) {
-      // *italic*
       nodes.push(<em key={ki}>{match[4]}</em>);
     } else if (match[5] !== undefined) {
-      // ~~strikethrough~~
       nodes.push(<del key={ki} className="text-muted-foreground">{match[5]}</del>);
     } else if (match[6] !== undefined) {
-      // `inline code`
       nodes.push(
         <code key={ki} className="rounded bg-code-block px-1.5 py-0.5 text-xs sm:text-sm text-code-block-foreground">
           {match[6]}
         </code>
       );
     } else if (match[7] !== undefined && match[8] !== undefined) {
-      // [text](url) — render as plain text (no clickable links)
       nodes.push(match[7]);
     }
     ki++;
@@ -204,15 +190,14 @@ function parseInline(text: string): React.ReactNode[] {
   return nodes.length > 0 ? nodes : [text];
 }
 
-// Parse markdown table block
 function renderTable(tableLines: string[], startKey: number): { node: React.ReactNode; key: number } {
   let key = startKey;
   const headerCells = tableLines[0].split("|").map(c => c.trim()).filter(Boolean);
-  const bodyRows = tableLines.slice(2); // skip header and separator
+  const bodyRows = tableLines.slice(2);
 
   return {
     node: (
-      <div key={key++} className="my-3 overflow-x-auto rounded-lg border border-border">
+      <div key={key++} className="my-3 overflow-x-auto rounded-lg border border-border animate-fade-in-up">
         <table className="w-full text-xs sm:text-sm">
           <thead>
             <tr className="border-b border-border bg-secondary/50">
@@ -255,12 +240,12 @@ function renderContent(content: string) {
   const flushCode = () => {
     const code = codeLines.join("\n");
     parts.push(
-      <div key={key++} className="my-3 rounded-lg overflow-hidden">
+      <div key={key++} className="my-3 rounded-lg overflow-hidden animate-fade-in-up">
         <div className="flex items-center justify-between bg-code-block-header px-3 sm:px-4 py-2 text-xs text-code-block-foreground">
           <span>{codeLang || "code"}</span>
           <button
             onClick={() => navigator.clipboard.writeText(code)}
-            className="flex items-center gap-1 hover:text-foreground transition-colors"
+            className="flex items-center gap-1 btn-interactive rounded px-1.5 py-0.5 transition-all"
           >
             <Copy className="h-3.5 w-3.5" />
             Copy
@@ -287,10 +272,8 @@ function renderContent(content: string) {
     }
     if (inCodeBlock) { codeLines.push(line); i++; continue; }
 
-    // Skip standalone image lines
     if (/^!\[[^\]]*\]\([^)]+\)$/.test(line.trim())) { i++; continue; }
 
-    // Table detection: current line has |, next line is separator (|---|)
     if (line.includes("|") && i + 1 < lines.length && /^\|?\s*[-:]+[-|\s:]*$/.test(lines[i + 1])) {
       const tableLines: string[] = [line, lines[i + 1]];
       let j = i + 2;
@@ -305,7 +288,6 @@ function renderContent(content: string) {
       continue;
     }
 
-    // Headings
     if (line.startsWith("### ")) {
       parts.push(<h3 key={key++} className="mt-4 mb-1.5 text-sm sm:text-base font-semibold text-foreground">{parseInline(line.slice(4))}</h3>);
     } else if (line.startsWith("## ")) {
@@ -313,27 +295,21 @@ function renderContent(content: string) {
     } else if (line.startsWith("# ")) {
       parts.push(<h1 key={key++} className="mt-4 sm:mt-5 mb-1.5 sm:mb-2 text-lg sm:text-xl font-bold text-foreground">{parseInline(line.slice(2))}</h1>);
     }
-    // Unordered list
     else if (line.startsWith("- ") || line.startsWith("* ")) {
       parts.push(<li key={key++} className="ml-4 sm:ml-5 list-disc leading-relaxed text-sm sm:text-[15px]">{parseInline(line.slice(2))}</li>);
     }
-    // Ordered list
     else if (/^\d+\.\s/.test(line)) {
       parts.push(<li key={key++} className="ml-4 sm:ml-5 list-decimal leading-relaxed text-sm sm:text-[15px]">{parseInline(line.replace(/^\d+\.\s/, ""))}</li>);
     }
-    // Blockquote
     else if (line.startsWith("> ")) {
       parts.push(<blockquote key={key++} className="my-2 border-l-2 border-muted-foreground/40 pl-3 sm:pl-4 italic text-muted-foreground text-xs sm:text-sm">{parseInline(line.slice(2))}</blockquote>);
     }
-    // Horizontal rule
     else if (line === "---" || line === "***") {
       parts.push(<hr key={key++} className="my-3 border-border" />);
     }
-    // Empty line
     else if (line === "") {
       parts.push(<br key={key++} />);
     }
-    // Normal paragraph
     else {
       parts.push(<p key={key++} className="my-0.5 leading-relaxed text-sm sm:text-[15px]">{parseInline(line)}</p>);
     }
@@ -367,7 +343,6 @@ export function MessageBubble({ message, isStreaming, ttsVoice = "Aoede" }: Mess
 
   const userImages = message.images || (message.image_url ? [message.image_url] : []);
 
-  // For assistant messages: extract inline images and strip source links
   const { text: cleanContent, images: inlineImages } = !isUser
     ? extractInlineImages(message.content)
     : { text: message.content, images: [] };
@@ -379,7 +354,7 @@ export function MessageBubble({ message, isStreaming, ttsVoice = "Aoede" }: Mess
       <div className={`flex gap-2 sm:gap-3 ${isUser ? "flex-row-reverse max-w-[88%] sm:max-w-[75%]" : "max-w-full"}`}>
         {/* Avatar */}
         {!isUser && (
-          <div className="flex h-6 w-6 sm:h-7 sm:w-7 flex-shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground mt-0.5">
+          <div className="flex h-6 w-6 sm:h-7 sm:w-7 flex-shrink-0 items-center justify-center rounded-full bg-interactive text-interactive-foreground mt-0.5 animate-pop">
             <Sparkles className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
           </div>
         )}
@@ -397,14 +372,14 @@ export function MessageBubble({ message, isStreaming, ttsVoice = "Aoede" }: Mess
             <div className="mb-2 sm:mb-3">
               <button
                 onClick={() => setThinkingOpen(!thinkingOpen)}
-                className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                className="flex items-center gap-1.5 text-xs text-muted-foreground btn-interactive rounded-lg px-2 py-1 transition-all"
               >
                 <Brain className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
                 <span>Размышления</span>
                 {thinkingOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
               </button>
               {thinkingOpen && (
-                <div className="mt-2 rounded-xl border border-border bg-secondary/40 p-3 text-xs text-muted-foreground whitespace-pre-wrap leading-relaxed">
+                <div className="mt-2 rounded-xl border border-border bg-secondary/40 p-3 text-xs text-muted-foreground whitespace-pre-wrap leading-relaxed animate-slide-up">
                   {message.thinking}
                 </div>
               )}
@@ -419,53 +394,53 @@ export function MessageBubble({ message, isStreaming, ttsVoice = "Aoede" }: Mess
               {isStreaming && !isUser && !message.content ? (
                 <div className="flex items-center gap-2 text-muted-foreground py-1">
                   <div className="flex gap-1">
-                    <span className="h-1.5 w-1.5 sm:h-2 sm:w-2 rounded-full bg-muted-foreground animate-bounce [animation-delay:0ms]" />
-                    <span className="h-1.5 w-1.5 sm:h-2 sm:w-2 rounded-full bg-muted-foreground animate-bounce [animation-delay:150ms]" />
-                    <span className="h-1.5 w-1.5 sm:h-2 sm:w-2 rounded-full bg-muted-foreground animate-bounce [animation-delay:300ms]" />
+                    <span className="h-1.5 w-1.5 sm:h-2 sm:w-2 rounded-full bg-interactive animate-bounce [animation-delay:0ms]" />
+                    <span className="h-1.5 w-1.5 sm:h-2 sm:w-2 rounded-full bg-interactive animate-bounce [animation-delay:150ms]" />
+                    <span className="h-1.5 w-1.5 sm:h-2 sm:w-2 rounded-full bg-interactive animate-bounce [animation-delay:300ms]" />
                   </div>
                 </div>
               ) : (
                 <>
                   {renderContent(displayContent)}
                   {isStreaming && !isUser && (
-                    <span className="inline-block w-1.5 h-4 sm:h-5 bg-foreground ml-0.5 animate-blink" />
+                    <span className="inline-block w-1.5 h-4 sm:h-5 bg-interactive ml-0.5 animate-blink rounded-sm" />
                   )}
                 </>
               )}
             </div>
           </div>
 
-          {/* Inline images at the BOTTOM of assistant message */}
+          {/* Inline images */}
           {!isUser && inlineImages.length > 0 && !isStreaming && (
             <div className="mt-3">
               <ImageGrid images={inlineImages.map(i => i.src)} />
             </div>
           )}
 
-          {/* Action bar for assistant messages */}
+          {/* Action bar */}
           {!isUser && !isStreaming && message.content && (
-            <div className="mt-1 sm:mt-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-              <button onClick={handleCopy} className="rounded-lg p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors active:scale-90" title={copied ? "Скопировано!" : "Копировать"}>
-                <Copy className={`h-3.5 w-3.5 ${copied ? "text-primary" : ""}`} />
+            <div className="mt-1 sm:mt-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-all duration-200">
+              <button onClick={handleCopy} className="btn-interactive rounded-lg p-1.5 text-muted-foreground transition-all" title={copied ? "Скопировано!" : "Копировать"}>
+                <Copy className={`h-3.5 w-3.5 ${copied ? "text-interactive" : ""}`} />
               </button>
               <button
                 onClick={handleSpeak}
-                className={`rounded-lg p-1.5 transition-colors active:scale-90 ${isSpeaking ? "text-primary bg-primary/10" : "text-muted-foreground hover:bg-secondary hover:text-foreground"}`}
+                className={`rounded-lg p-1.5 transition-all ${isSpeaking ? "text-interactive bg-interactive/10" : "btn-interactive text-muted-foreground"}`}
                 title={isSpeaking ? "Остановить" : "Озвучить"}
               >
                 {ttsState === "loading" ? (
                   <span className="h-3.5 w-3.5 flex items-center justify-center">
-                    <span className="h-2 w-2 rounded-full bg-current animate-pulse" />
+                    <span className="h-2 w-2 rounded-full bg-interactive animate-pulse" />
                   </span>
                 ) : isSpeaking ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
               </button>
-              <button onClick={() => setLiked(liked === true ? null : true)} className={`rounded-lg p-1.5 transition-colors active:scale-90 ${liked === true ? "text-primary bg-primary/10" : "text-muted-foreground hover:bg-secondary hover:text-foreground"}`} title="Хороший ответ">
+              <button onClick={() => setLiked(liked === true ? null : true)} className={`rounded-lg p-1.5 transition-all ${liked === true ? "text-interactive bg-interactive/10" : "btn-interactive text-muted-foreground"}`} title="Хороший ответ">
                 <ThumbsUp className="h-3.5 w-3.5" />
               </button>
-              <button onClick={() => setLiked(liked === false ? null : false)} className={`rounded-lg p-1.5 transition-colors active:scale-90 ${liked === false ? "text-destructive bg-destructive/10" : "text-muted-foreground hover:bg-secondary hover:text-foreground"}`} title="Плохой ответ">
+              <button onClick={() => setLiked(liked === false ? null : false)} className={`rounded-lg p-1.5 transition-all ${liked === false ? "text-destructive bg-destructive/10" : "btn-interactive text-muted-foreground"}`} title="Плохой ответ">
                 <ThumbsDown className="h-3.5 w-3.5" />
               </button>
-              <button className="rounded-lg p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors active:scale-90" title="Перегенерировать">
+              <button className="btn-interactive rounded-lg p-1.5 text-muted-foreground transition-all" title="Перегенерировать">
                 <RotateCcw className="h-3.5 w-3.5" />
               </button>
             </div>
@@ -474,7 +449,7 @@ export function MessageBubble({ message, isStreaming, ttsVoice = "Aoede" }: Mess
           {/* Edit for user messages */}
           {isUser && !isStreaming && (
             <div className="mt-1 flex justify-end">
-              <button className="rounded-lg p-1 text-muted-foreground hover:text-foreground transition-colors opacity-0 hover:opacity-100 active:scale-90" title="Редактировать">
+              <button className="btn-interactive rounded-lg p-1 text-muted-foreground transition-all opacity-0 hover:opacity-100" title="Редактировать">
                 <Pencil className="h-3.5 w-3.5" />
               </button>
             </div>

@@ -76,17 +76,17 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
     <div className="mx-auto w-full max-w-3xl px-2 sm:px-4 pb-2 sm:pb-4" style={{ paddingBottom: "max(8px, env(safe-area-inset-bottom, 8px))" }}>
       {/* Image previews */}
       {imagePreviews.length > 0 && (
-        <div className="mb-2 flex items-start gap-1.5 flex-wrap">
+        <div className="mb-2 flex items-start gap-1.5 flex-wrap animate-fade-in-up">
           {imagePreviews.map((src, i) => (
-            <div key={i} className="relative flex-shrink-0">
+            <div key={i} className="relative flex-shrink-0 animate-pop">
               <img src={src} alt={`Preview ${i + 1}`} className="h-14 w-14 sm:h-20 sm:w-20 rounded-lg object-cover border border-border" />
-              <button onClick={() => removeImage(i)} className="absolute -top-1.5 -right-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-destructive text-destructive-foreground text-xs">
+              <button onClick={() => removeImage(i)} className="absolute -top-1.5 -right-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-destructive text-destructive-foreground text-xs transition-transform active:scale-75">
                 <X className="h-3 w-3" />
               </button>
             </div>
           ))}
           {canAddMore && (
-            <button onClick={() => fileInputRef.current?.click()} className="flex h-14 w-14 sm:h-20 sm:w-20 flex-shrink-0 items-center justify-center rounded-lg border-2 border-dashed border-border text-muted-foreground hover:border-ring/50 hover:text-foreground transition-colors">
+            <button onClick={() => fileInputRef.current?.click()} className="flex h-14 w-14 sm:h-20 sm:w-20 flex-shrink-0 items-center justify-center rounded-lg border-2 border-dashed border-border text-muted-foreground btn-interactive transition-all">
               <Plus className="h-5 w-5" />
             </button>
           )}
@@ -94,15 +94,15 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
       )}
 
       {deepSearchMode && (
-        <div className="mb-2 flex items-center gap-2 rounded-xl bg-primary/10 px-3 py-1.5 text-sm text-primary">
+        <div className="mb-2 flex items-center gap-2 rounded-xl bg-interactive/10 px-3 py-1.5 text-sm text-interactive animate-slide-up">
           <Search className="h-4 w-4 flex-shrink-0" />
           <span className="truncate">Режим глубокого поиска</span>
-          <button onClick={() => setDeepSearchMode(false)} className="ml-auto flex-shrink-0"><X className="h-3.5 w-3.5" /></button>
+          <button onClick={() => setDeepSearchMode(false)} className="ml-auto flex-shrink-0 btn-interactive rounded-full p-0.5"><X className="h-3.5 w-3.5" /></button>
         </div>
       )}
 
       {isListening && (
-        <div className="mb-2 flex items-center gap-2 rounded-xl bg-destructive/10 px-3 py-1.5 text-sm text-destructive">
+        <div className="mb-2 flex items-center gap-2 rounded-xl bg-destructive/10 px-3 py-1.5 text-sm text-destructive animate-slide-up">
           <span className="relative flex h-2 w-2 flex-shrink-0">
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-destructive opacity-75" />
             <span className="relative inline-flex h-2 w-2 rounded-full bg-destructive" />
@@ -112,34 +112,33 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
       )}
 
       {isProcessing && (
-        <div className="mb-2 flex items-center gap-2 rounded-xl bg-muted px-3 py-1.5 text-sm text-muted-foreground">
+        <div className="mb-2 flex items-center gap-2 rounded-xl bg-muted px-3 py-1.5 text-sm text-muted-foreground animate-slide-up">
           <Loader2 className="h-3.5 w-3.5 animate-spin flex-shrink-0" />
           <span className="text-xs sm:text-sm">Распознаю речь...</span>
         </div>
       )}
 
-      <div className="relative flex items-end rounded-2xl border border-border bg-secondary/50 shadow-sm transition-all duration-200 focus-within:border-ring/50 focus-within:shadow-md">
+      <div className="relative flex items-end rounded-2xl border border-border bg-secondary/50 shadow-sm transition-all duration-200 focus-within:border-interactive/40 focus-within:shadow-md focus-within:shadow-interactive/5">
         <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden" onChange={handleFileSelect} />
 
         {/* Left buttons */}
         <div className="flex items-center pl-0.5 sm:pl-1">
           <button
             onClick={() => fileInputRef.current?.click()}
-            className="flex-shrink-0 rounded-lg p-2 sm:p-2.5 text-muted-foreground hover:bg-accent hover:text-foreground active:scale-90 transition-all"
+            className="btn-interactive flex-shrink-0 rounded-lg p-2 sm:p-2.5 text-muted-foreground transition-all"
             title="Прикрепить изображения"
           >
             <Image style={{ width: "18px", height: "18px" }} />
           </button>
 
-
           {deepSearchEnabled && (
             <button
               onClick={() => !deepSearchUsed && setDeepSearchMode(!deepSearchMode)}
               disabled={deepSearchUsed}
-              className={`flex-shrink-0 rounded-lg p-2 sm:p-2.5 transition-all active:scale-90 ${
+              className={`flex-shrink-0 rounded-lg p-2 sm:p-2.5 transition-all ${
                 deepSearchUsed ? "text-muted-foreground/30 cursor-not-allowed"
-                : deepSearchMode ? "text-primary bg-primary/10"
-                : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                : deepSearchMode ? "text-interactive bg-interactive/10"
+                : "btn-interactive text-muted-foreground"
               }`}
               title={deepSearchUsed ? "Лимит глубокого поиска исчерпан" : "Глубокий поиск"}
             >
@@ -151,10 +150,10 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
             <button
               onClick={toggleVoice}
               disabled={isProcessing}
-              className={`flex-shrink-0 rounded-lg p-2 sm:p-2.5 transition-all active:scale-90 ${
+              className={`flex-shrink-0 rounded-lg p-2 sm:p-2.5 transition-all ${
                 isListening ? "text-destructive bg-destructive/10"
                 : isProcessing ? "text-muted-foreground/40 cursor-not-allowed"
-                : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                : "btn-interactive text-muted-foreground"
               }`}
               title={isListening ? "Остановить запись" : isProcessing ? "Обработка..." : "Голосовой ввод"}
             >
@@ -181,7 +180,7 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
           disabled={!isStreaming && !value.trim() && imagePreviews.length === 0}
           className={`m-1.5 sm:m-2 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg transition-all active:scale-90 ${
             isStreaming ? "bg-foreground text-background"
-            : value.trim() || imagePreviews.length > 0 ? "bg-foreground text-background hover:opacity-80"
+            : value.trim() || imagePreviews.length > 0 ? "bg-interactive text-interactive-foreground hover:opacity-90 shadow-sm shadow-interactive/20"
             : "bg-muted text-muted-foreground cursor-not-allowed"
           }`}
         >
@@ -192,7 +191,6 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
       <p className="mt-1.5 sm:mt-2 text-center text-[11px] sm:text-xs text-muted-foreground">
         HikkoGPT может допускать ошибки. Проверяйте важную информацию.
       </p>
-
     </div>
   );
 }
