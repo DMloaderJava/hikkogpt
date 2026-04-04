@@ -65,14 +65,14 @@ export function ChatSidebar({
   return (
     <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
       {/* Header */}
-      <div className="flex items-center justify-between p-3">
+      <div className="flex items-center justify-between p-3 animate-fade-in">
         <div className="flex items-center gap-2">
-          <Sparkles className="h-5 w-5" />
+          <Sparkles className="h-5 w-5 text-interactive" />
           <span className="text-sm font-semibold">HikkoGPT</span>
         </div>
         <button
           onClick={onNewChat}
-          className="rounded-md p-1.5 transition-colors hover:bg-sidebar-accent"
+          className="btn-interactive rounded-md p-1.5 transition-all text-sidebar-foreground"
           title="Новый чат"
         >
           <Plus className="h-5 w-5" />
@@ -89,7 +89,7 @@ export function ChatSidebar({
             {group.chats.map((chat) => (
               <div
                 key={chat.id}
-                className={`group flex items-center gap-2 rounded-lg px-2 py-2 text-sm cursor-pointer transition-colors ${
+                className={`group flex items-center gap-2 rounded-lg px-2 py-2 text-sm cursor-pointer transition-all duration-150 ${
                   chat.id === activeChatId
                     ? "bg-sidebar-accent text-sidebar-accent-foreground"
                     : "hover:bg-sidebar-accent/50"
@@ -107,10 +107,10 @@ export function ChatSidebar({
                       autoFocus
                       onClick={(e) => e.stopPropagation()}
                     />
-                    <button onClick={(e) => { e.stopPropagation(); confirmEdit(); }}>
+                    <button onClick={(e) => { e.stopPropagation(); confirmEdit(); }} className="btn-interactive rounded p-0.5">
                       <Check className="h-3.5 w-3.5" />
                     </button>
-                    <button onClick={(e) => { e.stopPropagation(); setEditingId(null); }}>
+                    <button onClick={(e) => { e.stopPropagation(); setEditingId(null); }} className="btn-interactive rounded p-0.5">
                       <X className="h-3.5 w-3.5" />
                     </button>
                   </div>
@@ -120,13 +120,13 @@ export function ChatSidebar({
                     <div className="hidden items-center gap-0.5 group-hover:flex">
                       <button
                         onClick={(e) => { e.stopPropagation(); startEditing(chat); }}
-                        className="rounded p-1 hover:bg-sidebar-accent"
+                        className="btn-interactive rounded p-1 transition-all"
                       >
                         <Pencil className="h-3.5 w-3.5" />
                       </button>
                       <button
                         onClick={(e) => { e.stopPropagation(); onDeleteChat(chat.id); }}
-                        className="rounded p-1 hover:bg-destructive/20 hover:text-destructive"
+                        className="rounded p-1 hover:bg-destructive/20 hover:text-destructive transition-all active:scale-90"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
@@ -147,8 +147,8 @@ export function ChatSidebar({
 
       {/* Footer */}
       <div className="border-t border-sidebar-border p-3">
-        <div className="flex items-center gap-2 rounded-lg px-2 py-2 text-sm hover:bg-sidebar-accent cursor-pointer transition-colors">
-          <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-medium">
+        <div className="flex items-center gap-2 rounded-lg px-2 py-2 text-sm hover:bg-sidebar-accent cursor-pointer transition-all">
+          <div className="flex h-7 w-7 items-center justify-center rounded-full bg-interactive text-interactive-foreground text-xs font-medium">
             {userEmail?.[0]?.toUpperCase() || "U"}
           </div>
           <span className="text-sm truncate">{userEmail || "User"}</span>

@@ -48,7 +48,6 @@ const Index = () => {
     else setSidebarOpen(false);
   }, [isMobile]);
 
-  // Auto scroll to bottom on new messages
   useEffect(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
@@ -58,7 +57,6 @@ const Index = () => {
     }
   }, [activeChat?.messages, deepSearch.report]);
 
-  // Show scroll button when not at bottom
   useEffect(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
@@ -74,7 +72,6 @@ const Index = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
-  // Swipe to close sidebar on mobile
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     touchStartXRef.current = e.touches[0].clientX;
     touchStartYRef.current = e.touches[0].clientY;
@@ -83,7 +80,6 @@ const Index = () => {
   const handleTouchEnd = useCallback((e: React.TouchEvent) => {
     const dx = touchStartXRef.current - e.changedTouches[0].clientX;
     const dy = Math.abs(touchStartYRef.current - e.changedTouches[0].clientY);
-    // Swipe left ≥ 60px, and mostly horizontal
     if (dx > 60 && dy < 80 && sidebarOpen && isMobile) {
       setSidebarOpen(false);
     }
@@ -164,7 +160,7 @@ const Index = () => {
       {/* Mobile sidebar overlay */}
       {isMobile && sidebarOpen && (
         <div
-          className="fixed inset-0 z-40 bg-background/60 backdrop-blur-sm"
+          className="fixed inset-0 z-40 bg-background/60 backdrop-blur-sm animate-fade-in"
           onClick={() => setSidebarOpen(false)}
         />
       )}
@@ -184,7 +180,7 @@ const Index = () => {
           {isMobile && sidebarOpen && (
             <button
               onClick={() => setSidebarOpen(false)}
-              className="absolute right-3 top-3 z-10 rounded-lg p-1.5 text-muted-foreground hover:bg-sidebar-accent transition-colors"
+              className="absolute right-3 top-3 z-10 rounded-lg p-1.5 text-muted-foreground btn-interactive transition-all"
             >
               <X className="h-4 w-4" />
             </button>
@@ -202,11 +198,11 @@ const Index = () => {
 
         {/* Desktop header */}
         {!isMobile && (
-          <header className="flex items-center justify-between border-b border-border px-3 py-2 gap-2 flex-shrink-0">
+          <header className="flex items-center justify-between border-b border-border px-3 py-2 gap-2 flex-shrink-0 animate-fade-in">
             <div className="flex items-center gap-1.5 min-w-0">
               <button
                 onClick={() => setSidebarOpen(!sidebarOpen)}
-                className="rounded-lg p-2 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors flex-shrink-0"
+                className="btn-interactive rounded-lg p-2 text-muted-foreground transition-all flex-shrink-0"
               >
                 <Menu className="h-5 w-5" />
               </button>
@@ -217,14 +213,14 @@ const Index = () => {
             <div className="flex items-center gap-0.5 flex-shrink-0">
               <button
                 onClick={() => setThinkingEnabled(!thinkingEnabled)}
-                className={`rounded-lg p-2 transition-colors ${thinkingEnabled ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-secondary hover:text-foreground"}`}
+                className={`rounded-lg p-2 transition-all ${thinkingEnabled ? "bg-interactive/15 text-interactive" : "btn-interactive text-muted-foreground"}`}
                 title={thinkingEnabled ? "Thinking mode включён" : "Включить thinking mode"}
               >
                 <Brain className="h-5 w-5" />
               </button>
               <button
                 onClick={() => setSettingsOpen(true)}
-                className="rounded-lg p-2 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+                className="btn-interactive rounded-lg p-2 text-muted-foreground transition-all"
                 title="Настройки"
               >
                 <Settings className="h-5 w-5" />
@@ -241,7 +237,7 @@ const Index = () => {
           >
             <button
               onClick={() => setSidebarOpen(true)}
-              className="pointer-events-auto rounded-xl p-2.5 text-muted-foreground hover:bg-secondary/80 active:scale-90 transition-all"
+              className="pointer-events-auto btn-interactive rounded-xl p-2.5 text-muted-foreground transition-all"
             >
               <Menu className="h-5 w-5" />
             </button>
@@ -253,20 +249,20 @@ const Index = () => {
             <div className="flex items-center gap-0.5 pointer-events-auto">
               <button
                 onClick={() => setThinkingEnabled(!thinkingEnabled)}
-                className={`rounded-xl p-2.5 transition-all active:scale-90 ${thinkingEnabled ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-secondary/80"}`}
+                className={`rounded-xl p-2.5 transition-all active:scale-90 ${thinkingEnabled ? "bg-interactive/15 text-interactive" : "btn-interactive text-muted-foreground"}`}
               >
                 <Brain className="h-5 w-5" />
               </button>
               <button
                 onClick={handleNewChat}
-                className="rounded-xl p-2.5 text-muted-foreground hover:bg-secondary/80 active:scale-90 transition-all"
+                className="btn-interactive rounded-xl p-2.5 text-muted-foreground transition-all"
                 title="Новый чат"
               >
                 <SquarePen className="h-5 w-5" />
               </button>
               <button
                 onClick={() => setSettingsOpen(true)}
-                className="rounded-xl p-2.5 text-muted-foreground hover:bg-secondary/80 active:scale-90 transition-all"
+                className="btn-interactive rounded-xl p-2.5 text-muted-foreground transition-all"
                 title="Настройки"
               >
                 <Settings className="h-5 w-5" />
@@ -307,7 +303,7 @@ const Index = () => {
           {showScrollBtn && displayMessages.length > 0 && (
             <button
               onClick={scrollToBottom}
-              className="absolute bottom-[calc(100px+env(safe-area-inset-bottom,0px))] left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 rounded-full border border-border bg-background/90 backdrop-blur-sm px-3 py-1.5 text-xs text-muted-foreground shadow-lg hover:bg-secondary hover:text-foreground transition-all active:scale-95 animate-fade-in-up"
+              className="absolute bottom-[calc(100px+env(safe-area-inset-bottom,0px))] left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 rounded-full border border-border bg-background/90 backdrop-blur-sm px-3 py-1.5 text-xs text-muted-foreground shadow-lg btn-interactive transition-all animate-pop"
             >
               <ChevronDown className="h-3.5 w-3.5" />
               <span>Вниз</span>
