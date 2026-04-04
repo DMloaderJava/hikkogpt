@@ -426,15 +426,12 @@ export function useChat() {
           );
         }
 
-        // Save assistant message to DB
-        await supabase.from("messages").insert({
-          chat_id: chatId,
-          role: "assistant",
-          content: assistantSoFar,
-        });
-
-        // Update chat updated_at
-        await supabase.from("chats").update({ updated_at: new Date().toISOString() }).eq("id", chatId);
+        // Ensure earlier DB writes finished, then save assistant message in parallel with updated_at
+        await dbWrites;
+        Promise.all([
+          supabase.from("messages").insert({ chat_id: chatId, role: "assistant", content: assistantSoFar }),
+          supabase.from("chats").update({ updated_at: new Date().toISOString() }).eq("id", chatId),
+        ]);
       } catch (e: unknown) {
         if (e instanceof DOMException && e.name === "AbortError") {
           // User stopped
