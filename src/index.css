@@ -49,6 +49,9 @@
     --code-block: 0 0% 13%;
     --code-block-foreground: 0 0% 90%;
     --code-block-header: 0 0% 18%;
+
+    --interactive: 210 100% 52%;
+    --interactive-foreground: 0 0% 100%;
   }
 
   .dark {
@@ -94,6 +97,9 @@
     --code-block: 220 10% 8%;
     --code-block-foreground: 0 0% 90%;
     --code-block-header: 220 8% 14%;
+
+    --interactive: 210 100% 60%;
+    --interactive-foreground: 0 0% 100%;
   }
 }
 
@@ -124,6 +130,20 @@
   }
 }
 
+/* Interactive button hover/active — blue glow */
+.btn-interactive {
+  transition: all 0.2s ease;
+}
+.btn-interactive:hover {
+  color: hsl(var(--interactive));
+  background-color: hsl(var(--interactive) / 0.1);
+}
+.btn-interactive:active {
+  color: hsl(var(--interactive));
+  background-color: hsl(var(--interactive) / 0.18);
+  transform: scale(0.92);
+}
+
 @keyframes blink {
   0%, 50% { opacity: 1; }
   51%, 100% { opacity: 0; }
@@ -146,4 +166,82 @@
 
 .animate-fade-in-up {
   animation: fade-in-up 0.3s ease-out;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.25s ease-out;
+}
+
+@keyframes slide-in-left {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+
+.animate-slide-in-left {
+  animation: slide-in-left 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-slide-up {
+  animation: slide-up 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-scale-in {
+  animation: scale-in 0.2s ease-out;
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.animate-shimmer {
+  background: linear-gradient(90deg, transparent, hsl(var(--muted)) 50%, transparent);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+@keyframes pop {
+  0% { transform: scale(0.8); opacity: 0; }
+  60% { transform: scale(1.05); }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.animate-pop {
+  animation: pop 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes pulse-ring {
+  0% { transform: scale(1); opacity: 0.5; }
+  100% { transform: scale(1.5); opacity: 0; }
+}
+
+.animate-pulse-ring {
+  animation: pulse-ring 1.2s ease-out infinite;
 }
