@@ -367,6 +367,7 @@ export function useChat() {
 
               const textDelta = delta?.content as string | undefined;
               if (textDelta) {
+                if (assistantSoFar === "") playSound("receive");
                 assistantSoFar += textDelta;
               }
 
