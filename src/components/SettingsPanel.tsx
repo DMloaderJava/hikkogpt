@@ -1,4 +1,4 @@
-import { X, Volume2, Moon, Sun, LogOut } from "lucide-react";
+import { X, Volume2, Moon, Sun, LogOut, Bell, BellOff } from "lucide-react";
 
 const TTS_VOICES = [
   { id: "Aoede", label: "Aoede", desc: "Женский голос" },
@@ -18,9 +18,11 @@ interface SettingsPanelProps {
   onVoiceChange: (v: string) => void;
   onSignOut: () => void;
   userEmail?: string;
+  soundsEnabled?: boolean;
+  onToggleSounds?: () => void;
 }
 
-export function SettingsPanel({ open, onClose, isDark, onToggleTheme, ttsVoice, onVoiceChange, onSignOut, userEmail }: SettingsPanelProps) {
+export function SettingsPanel({ open, onClose, isDark, onToggleTheme, ttsVoice, onVoiceChange, onSignOut, userEmail, soundsEnabled = true, onToggleSounds }: SettingsPanelProps) {
   if (!open) return null;
 
   return (
@@ -59,6 +61,20 @@ export function SettingsPanel({ open, onClose, isDark, onToggleTheme, ttsVoice, 
             {isDark ? <Moon className="h-4 w-4 text-muted-foreground" /> : <Sun className="h-4 w-4 text-muted-foreground" />}
           </button>
         </div>
+
+        {/* Sounds */}
+        {onToggleSounds && (
+          <div className="mb-4">
+            <p className="mb-2 text-xs font-medium text-muted-foreground uppercase tracking-wider">Звуковые эффекты</p>
+            <button
+              onClick={onToggleSounds}
+              className="flex w-full items-center justify-between rounded-xl bg-secondary/50 px-4 py-3 text-sm text-foreground btn-interactive transition-all"
+            >
+              <span>{soundsEnabled ? "Звуки включены" : "Звуки выключены"}</span>
+              {soundsEnabled ? <Bell className="h-4 w-4 text-interactive" /> : <BellOff className="h-4 w-4 text-muted-foreground" />}
+            </button>
+          </div>
+        )}
 
         {/* TTS Voice */}
         <div className="mb-5">

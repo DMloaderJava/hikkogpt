@@ -16,7 +16,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 const Index = () => {
   const {
     chats, activeChat, activeChatId, isStreaming,
-    selectedModel, thinkingEnabled,
+    selectedModel, thinkingEnabled, soundsEnabled, toggleSounds,
     setThinkingEnabled, setSelectedModel, setActiveChatId,
     createNewChat, deleteChat, renameChat, sendMessage, stopStreaming,
   } = useChat();
@@ -332,6 +332,8 @@ const Index = () => {
         onVoiceChange={handleVoiceChange}
         onSignOut={signOut}
         userEmail={user?.email}
+        soundsEnabled={soundsEnabled}
+        onToggleSounds={toggleSounds}
       />
     </div>
   );

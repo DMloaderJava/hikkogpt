@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { useSounds } from "@/hooks/useSounds";
 
 export interface Message {
   id: string;
@@ -70,8 +71,21 @@ export function useChat() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [selectedModel, setSelectedModel] = useState("HikkoGPT");
   const [thinkingEnabled, setThinkingEnabled] = useState(false);
+  const [soundsEnabled, setSoundsEnabled] = useState(() => {
+    if (typeof window === "undefined") return true;
+    return localStorage.getItem("hikko_sounds") !== "0";
+  });
+  const { play: playSound } = useSounds(soundsEnabled);
   const abortRef = useRef<AbortController | null>(null);
   const loadedRef = useRef(false);
+
+  const toggleSounds = useCallback(() => {
+    setSoundsEnabled((v) => {
+      const nv = !v;
+      try { localStorage.setItem("hikko_sounds", nv ? "1" : "0"); } catch {}
+      return nv;
+    });
+  }, []);
 
   const activeChat = chats.find((c) => c.id === activeChatId) || null;
 
@@ -240,6 +254,9 @@ export function useChat() {
         )
       );
 
+      // Play send sound
+      playSound("send");
+
       // Fire DB writes in parallel, don't await them before streaming
       const dbWrites = Promise.all([
         supabase.from("messages").insert({ chat_id: chatId, role: "user", content, image_url: firstImage }),
@@ -350,6 +367,7 @@ export function useChat() {
 
               const textDelta = delta?.content as string | undefined;
               if (textDelta) {
+                if (assistantSoFar === "") playSound("receive");
                 assistantSoFar += textDelta;
               }
 
@@ -459,6 +477,8 @@ export function useChat() {
     isStreaming,
     selectedModel,
     thinkingEnabled,
+    soundsEnabled,
+    toggleSounds,
     setThinkingEnabled,
     setSelectedModel,
     setActiveChatId,
