@@ -254,6 +254,9 @@ export function useChat() {
         )
       );
 
+      // Play send sound
+      playSound("send");
+
       // Fire DB writes in parallel, don't await them before streaming
       const dbWrites = Promise.all([
         supabase.from("messages").insert({ chat_id: chatId, role: "user", content, image_url: firstImage }),
