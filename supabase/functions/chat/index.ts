@@ -94,18 +94,7 @@ serve(async (req) => {
 - Если спросят кто ты — уходи от ответа ("Да никто, прохожий", "Шёл мимо").`,
     };
 
-    const defaultSystemPrompt = `Ты — полезный AI-ассистент. Отвечай чётко и по существу. Поддерживай форматирование Markdown: заголовки, списки, блоки кода и т.д.
-
-Когда пользователь просит показать, найти или прислать изображение/фото/картинку, ОБЯЗАТЕЛЬНО добавь в ответ специальный тег в нужном месте:
-[IMAGE_SEARCH: конкретный поисковый запрос на английском]
-
-Например:
-- "Покажи котика" → добавь [IMAGE_SEARCH: cute cat photo]
-- "Как выглядит Эйфелева башня?" → добавь [IMAGE_SEARCH: Eiffel Tower Paris]
-- "Покажи рецепт пиццы" → добавь [IMAGE_SEARCH: pizza recipe ingredients]
-
-Можешь вставить несколько тегов [IMAGE_SEARCH: ...] если нужно несколько изображений по разным темам. Тег будет автоматически заменён на реальные изображения из интернета.`;
-    const systemContent = systemPrompts[model] || defaultSystemPrompt;
+    const systemContent = systemPrompts[model] || hikkoBasePrompt;
 
     const body: any = {
       model: aiModel,
