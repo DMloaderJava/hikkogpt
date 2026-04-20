@@ -477,6 +477,8 @@ export function useChat() {
     isStreaming,
     selectedModel,
     thinkingEnabled,
+    soundsEnabled,
+    toggleSounds,
     setThinkingEnabled,
     setSelectedModel,
     setActiveChatId,
