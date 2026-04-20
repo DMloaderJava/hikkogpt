@@ -62,6 +62,20 @@ export function SettingsPanel({ open, onClose, isDark, onToggleTheme, ttsVoice, 
           </button>
         </div>
 
+        {/* Sounds */}
+        {onToggleSounds && (
+          <div className="mb-4">
+            <p className="mb-2 text-xs font-medium text-muted-foreground uppercase tracking-wider">Звуковые эффекты</p>
+            <button
+              onClick={onToggleSounds}
+              className="flex w-full items-center justify-between rounded-xl bg-secondary/50 px-4 py-3 text-sm text-foreground btn-interactive transition-all"
+            >
+              <span>{soundsEnabled ? "Звуки включены" : "Звуки выключены"}</span>
+              {soundsEnabled ? <Bell className="h-4 w-4 text-interactive" /> : <BellOff className="h-4 w-4 text-muted-foreground" />}
+            </button>
+          </div>
+        )}
+
         {/* TTS Voice */}
         <div className="mb-5">
           <div className="mb-2 flex items-center gap-1.5">
