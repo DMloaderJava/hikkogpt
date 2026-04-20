@@ -1,4 +1,4 @@
-import { X, Volume2, Moon, Sun, LogOut } from "lucide-react";
+import { X, Volume2, Moon, Sun, LogOut, Bell, BellOff } from "lucide-react";
 
 const TTS_VOICES = [
   { id: "Aoede", label: "Aoede", desc: "Женский голос" },
@@ -18,9 +18,11 @@ interface SettingsPanelProps {
   onVoiceChange: (v: string) => void;
   onSignOut: () => void;
   userEmail?: string;
+  soundsEnabled?: boolean;
+  onToggleSounds?: () => void;
 }
 
-export function SettingsPanel({ open, onClose, isDark, onToggleTheme, ttsVoice, onVoiceChange, onSignOut, userEmail }: SettingsPanelProps) {
+export function SettingsPanel({ open, onClose, isDark, onToggleTheme, ttsVoice, onVoiceChange, onSignOut, userEmail, soundsEnabled = true, onToggleSounds }: SettingsPanelProps) {
   if (!open) return null;
 
   return (
