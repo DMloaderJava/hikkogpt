@@ -90,6 +90,8 @@ async function tryGeminiFallback(aiModel: string, systemContent: string, message
   }
   return null;
 }
+
+serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
