@@ -158,6 +158,10 @@ serve(async (req) => {
         );
       }
       if (response.status === 402) {
+        // Fallback: try direct Google Gemini API with rotating keys
+        console.log("Lovable AI balance exhausted, falling back to direct Gemini API");
+        const fallback = await tryGeminiFallback(aiModel, systemContent, messages);
+        if (fallback) return fallback;
         return new Response(
           JSON.stringify({ error: "Необходимо пополнить баланс." }),
           { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
