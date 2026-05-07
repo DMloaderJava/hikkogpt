@@ -82,20 +82,19 @@ serve(async (req) => {
         });
       }
       const errorText = await response.text();
-      throw new Error(`TTS failed [${response.status}]: ${errorText}`);
+      console.error(`TTS failed [${response.status}]:`, errorText);
+      return new Response(JSON.stringify({ error: 'Speech generation failed. Please try again.' }), {
+        status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
-    // Return audio stream directly
     return new Response(response.body, {
-      headers: {
-        ...corsHeaders,
-        'Content-Type': 'audio/mpeg',
-      },
+      headers: { ...corsHeaders, 'Content-Type': 'audio/mpeg' },
     });
 
   } catch (error) {
     console.error('TTS error:', error);
-    return new Response(JSON.stringify({ error: error.message }), {
+    return new Response(JSON.stringify({ error: 'Speech generation failed. Please try again.' }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
