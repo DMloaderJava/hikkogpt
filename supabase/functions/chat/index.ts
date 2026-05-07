@@ -6,7 +6,90 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-serve(async (req) => {
+// Map Lovable model id -> direct Google Gemini model id
+function toGoogleModel(m: string): string {
+  if (m.includes("3.1-pro")) return "gemini-2.0-flash-exp";
+  if (m.includes("3-flash")) return "gemini-2.0-flash";
+  if (m.includes("2.5-pro")) return "gemini-1.5-pro";
+  if (m.includes("2.5-flash")) return "gemini-1.5-flash";
+  return "gemini-2.0-flash";
+}
+
+async function tryGeminiFallback(aiModel: string, systemContent: string, messages: any[]): Promise<Response | null> {
+  const raw = Deno.env.get("GEMINI_API_KEYS") || "";
+  const keys = raw.split(/[\s,;\n]+/).map((k) => k.trim()).filter(Boolean);
+  if (keys.length === 0) return null;
+
+  const googleModel = toGoogleModel(aiModel);
+  const contents = messages.map((m: any) => ({
+    role: m.role === "assistant" ? "model" : "user",
+    parts: [{ text: typeof m.content === "string" ? m.content : JSON.stringify(m.content) }],
+  }));
+
+  const body = {
+    systemInstruction: { parts: [{ text: systemContent }] },
+    contents,
+  };
+
+  for (const key of keys) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${googleModel}:streamGenerateContent?alt=sse&key=${key}`;
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!resp.ok || !resp.body) {
+        const txt = await resp.text().catch(() => "");
+        console.warn(`Gemini key failed [${resp.status}]: ${txt.slice(0, 200)}`);
+        continue;
+      }
+
+      // Convert Gemini SSE -> OpenAI-style SSE expected by frontend
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      const encoder = new TextEncoder();
+      let buffer = "";
+
+      const stream = new ReadableStream({
+        async pull(controller) {
+          const { done, value } = await reader.read();
+          if (done) {
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
+            return;
+          }
+          buffer += decoder.decode(value, { stream: true });
+          let idx;
+          while ((idx = buffer.indexOf("\n")) !== -1) {
+            let line = buffer.slice(0, idx);
+            buffer = buffer.slice(idx + 1);
+            if (line.endsWith("\r")) line = line.slice(0, -1);
+            if (!line.startsWith("data: ")) continue;
+            const json = line.slice(6).trim();
+            if (!json) continue;
+            try {
+              const parsed = JSON.parse(json);
+              const text = parsed?.candidates?.[0]?.content?.parts?.map((p: any) => p.text).filter(Boolean).join("") || "";
+              if (text) {
+                const chunk = { choices: [{ delta: { content: text } }] };
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+              }
+            } catch (_) { /* ignore */ }
+          }
+        },
+      });
+
+      return new Response(stream, {
+        headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
+      });
+    } catch (e) {
+      console.warn("Gemini fallback key error:", e);
+      continue;
+    }
+  }
+  return null;
+}
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
