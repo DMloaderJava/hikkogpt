@@ -88,10 +88,7 @@ export function useDeepSearch() {
     try {
       const resp = await fetch(DEEPSEARCH_URL, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
-        },
+        headers: { "Content-Type": "application/json", ...(await getEdgeAuthHeaders()) },
         body: JSON.stringify({ action: "search", query, answers }),
         signal: controller.signal,
       });
