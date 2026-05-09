@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { Search, X, ExternalLink } from "lucide-react";
+import { getEdgeAuthHeaders } from "@/lib/edgeAuth";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
 interface ImageResult {
   url: string;
