@@ -364,9 +364,10 @@ export function useChat() {
               const choice = parsed.choices?.[0];
               const delta = choice?.delta;
 
-              // Check for thinking content
-              if (delta?.reasoning_content) {
-                thinkingSoFar += delta.reasoning_content;
+              // Check for thinking content (support both reasoning_content and reasoning)
+              const reasoningDelta = delta?.reasoning_content ?? delta?.reasoning;
+              if (reasoningDelta) {
+                thinkingSoFar += reasoningDelta;
               }
 
               const textDelta = delta?.content as string | undefined;
@@ -375,7 +376,7 @@ export function useChat() {
                 assistantSoFar += textDelta;
               }
 
-              if (textDelta || delta?.reasoning_content) {
+              if (textDelta || reasoningDelta) {
                 const contentSnap = assistantSoFar;
                 const thinkingSnap = thinkingSoFar;
                 setChats((prev) =>
@@ -410,7 +411,8 @@ export function useChat() {
             try {
               const parsed = JSON.parse(jsonStr);
               const delta = parsed.choices?.[0]?.delta;
-              if (delta?.reasoning_content) thinkingSoFar += delta.reasoning_content;
+              const r = delta?.reasoning_content ?? delta?.reasoning;
+              if (r) thinkingSoFar += r;
               if (delta?.content) assistantSoFar += delta.content;
             } catch { /* ignore */ }
           }
