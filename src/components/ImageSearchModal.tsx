@@ -31,7 +31,7 @@ export function ImageSearchModal({ onSelect, onClose }: ImageSearchModalProps) {
     try {
       const resp = await fetch(`${SUPABASE_URL}/functions/v1/image-search`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+        headers: { "Content-Type": "application/json", ...(await getEdgeAuthHeaders()) },
         body: JSON.stringify({ query: query.trim() }),
       });
       const data = await resp.json();
