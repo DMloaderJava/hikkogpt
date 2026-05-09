@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef } from "react";
 import { toast } from "sonner";
+import { getEdgeAuthHeaders } from "@/lib/edgeAuth";
 
 const DEEPSEARCH_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/deepsearch`;
 
