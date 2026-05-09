@@ -1,4 +1,4 @@
-import { ChevronDown, Check, Zap, Brain, Sparkles, User, Rocket } from "lucide-react";
+import { ChevronDown, Check, Zap, Brain, Sparkles, User, Rocket, Swords } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 
 interface ModelSelectorProps {
@@ -7,9 +7,10 @@ interface ModelSelectorProps {
 }
 
 const models = [
-  { id: "HikkoGPT", label: "HikkoGPT", description: "Самый умный", icon: Sparkles },
-  { id: "Илья", label: "Илья", description: "Тёплый и спокойный", icon: Brain },
+  { id: "HikkoGPT Smart", label: "HikkoGPT Smart", description: "Быстрый и умный", icon: Sparkles },
+  { id: "HikkoGPT", label: "HikkoGPT", description: "Самый умный", icon: Brain },
   { id: "HikkoGPT Turbo", label: "HikkoGPT Turbo", description: "Быстрый", icon: Zap },
+  { id: "Спорящий", label: "Спорящий", description: "Оппонент и аналитик", icon: Swords },
 ];
 
 const characters = [
