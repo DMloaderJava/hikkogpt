@@ -411,7 +411,8 @@ export function useChat() {
             try {
               const parsed = JSON.parse(jsonStr);
               const delta = parsed.choices?.[0]?.delta;
-              if (delta?.reasoning_content) thinkingSoFar += delta.reasoning_content;
+              const r = delta?.reasoning_content ?? delta?.reasoning;
+              if (r) thinkingSoFar += r;
               if (delta?.content) assistantSoFar += delta.content;
             } catch { /* ignore */ }
           }
