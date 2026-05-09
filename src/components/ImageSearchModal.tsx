@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { Search, X, ExternalLink } from "lucide-react";
+import { getEdgeAuthHeaders } from "@/lib/edgeAuth";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
 interface ImageResult {
   url: string;
@@ -31,7 +31,7 @@ export function ImageSearchModal({ onSelect, onClose }: ImageSearchModalProps) {
     try {
       const resp = await fetch(`${SUPABASE_URL}/functions/v1/image-search`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+        headers: { "Content-Type": "application/json", ...(await getEdgeAuthHeaders()) },
         body: JSON.stringify({ query: query.trim() }),
       });
       const data = await resp.json();

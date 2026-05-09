@@ -38,9 +38,10 @@ async function resolveImageSearchTags(text: string): Promise<string> {
     matches.map(async (match) => {
       const query = match[1].trim();
       try {
+        const { getEdgeAuthHeaders } = await import("@/lib/edgeAuth");
         const resp = await fetch(IMAGE_SEARCH_URL, {
           method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+          headers: { "Content-Type": "application/json", ...(await getEdgeAuthHeaders()) },
           body: JSON.stringify({ query }),
         });
         if (!resp.ok) return { match: match[0], replacement: "" };
@@ -305,11 +306,14 @@ export function useChat() {
       );
 
       try {
+        const { data: { session } } = await supabase.auth.getSession();
+        const accessToken = session?.access_token ?? import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
         const resp = await fetch(CHAT_URL, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+            Authorization: `Bearer ${accessToken}`,
+            apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
           },
           body: JSON.stringify({ messages: apiMessages, model: selectedModel, thinking: thinkingEnabled }),
           signal: controller.signal,

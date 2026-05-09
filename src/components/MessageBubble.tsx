@@ -1,9 +1,9 @@
 import { Copy, ThumbsUp, ThumbsDown, RotateCcw, Volume2, VolumeX, Pencil, Sparkles, ChevronDown, ChevronRight, Brain } from "lucide-react";
 import { useState, useRef, useCallback } from "react";
 import type { Message } from "@/hooks/useChat";
+import { getEdgeAuthHeaders } from "@/lib/edgeAuth";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
 type VoiceState = "idle" | "loading" | "playing";
 
@@ -40,10 +40,7 @@ function useTTS() {
     try {
       const resp = await fetch(`${SUPABASE_URL}/functions/v1/gemini-tts`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-        },
+        headers: { "Content-Type": "application/json", ...(await getEdgeAuthHeaders()) },
         body: JSON.stringify({ text: clean, voice }),
       });
 

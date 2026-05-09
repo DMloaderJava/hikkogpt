@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
+import { getEdgeAuthHeaders } from "@/lib/edgeAuth";
 
 export type VoiceState = "idle" | "listening" | "processing" | "speaking";
 
@@ -8,7 +9,6 @@ interface UseVoiceOptions {
 }
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
 export function useVoice({ onTranscript, lang = "ru-RU" }: UseVoiceOptions = {}) {
   const [state, setState] = useState<VoiceState>("idle");
@@ -74,10 +74,7 @@ export function useVoice({ onTranscript, lang = "ru-RU" }: UseVoiceOptions = {})
             `${SUPABASE_URL}/functions/v1/elevenlabs-stt`,
             {
               method: "POST",
-              headers: {
-                apikey: SUPABASE_ANON_KEY,
-                Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-              },
+              headers: await getEdgeAuthHeaders(),
               body: formData,
             }
           );
