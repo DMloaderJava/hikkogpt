@@ -74,10 +74,7 @@ export function useVoice({ onTranscript, lang = "ru-RU" }: UseVoiceOptions = {})
             `${SUPABASE_URL}/functions/v1/elevenlabs-stt`,
             {
               method: "POST",
-              headers: {
-                apikey: SUPABASE_ANON_KEY,
-                Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-              },
+              headers: await getEdgeAuthHeaders(),
               body: formData,
             }
           );
