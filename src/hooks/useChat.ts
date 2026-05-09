@@ -70,7 +70,7 @@ export function useChat() {
   const [chats, setChats] = useState<Chat[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
-  const [selectedModel, setSelectedModel] = useState("HikkoGPT");
+  const [selectedModel, setSelectedModel] = useState("HikkoGPT Smart");
   const [thinkingEnabled, setThinkingEnabled] = useState(false);
   const [soundsEnabled, setSoundsEnabled] = useState(() => {
     if (typeof window === "undefined") return true;
