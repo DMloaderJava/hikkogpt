@@ -38,9 +38,10 @@ async function resolveImageSearchTags(text: string): Promise<string> {
     matches.map(async (match) => {
       const query = match[1].trim();
       try {
+        const { getEdgeAuthHeaders } = await import("@/lib/edgeAuth");
         const resp = await fetch(IMAGE_SEARCH_URL, {
           method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+          headers: { "Content-Type": "application/json", ...(await getEdgeAuthHeaders()) },
           body: JSON.stringify({ query }),
         });
         if (!resp.ok) return { match: match[0], replacement: "" };
