@@ -40,10 +40,7 @@ function useTTS() {
     try {
       const resp = await fetch(`${SUPABASE_URL}/functions/v1/gemini-tts`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-        },
+        headers: { "Content-Type": "application/json", ...(await getEdgeAuthHeaders()) },
         body: JSON.stringify({ text: clean, voice }),
       });
 
