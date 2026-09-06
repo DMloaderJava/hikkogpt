@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
-import { X, Loader2, Volume2, Download } from "lucide-react";
+import { X, Loader2, Volume2 } from "lucide-react";
 import { getEdgeAuthHeaders } from "@/lib/edgeAuth";
+import { AudioPlayer } from "@/components/AudioPlayer";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 
@@ -137,15 +138,8 @@ export function DialogTtsModal({ open, onClose }: DialogTtsModalProps) {
         </button>
 
         {audioUrl && (
-          <div className="mt-3 space-y-2 animate-fade-in-up">
-            <audio src={audioUrl} controls autoPlay className="w-full" />
-            <a
-              href={audioUrl}
-              download="dialog.wav"
-              className="flex items-center justify-center gap-2 rounded-xl border border-border py-2 text-xs text-muted-foreground btn-interactive transition-all"
-            >
-              <Download className="h-3.5 w-3.5" /> Скачать
-            </a>
+          <div className="mt-3">
+            <AudioPlayer src={audioUrl} fileName="dialog.wav" />
           </div>
         )}
       </div>
