@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { ArrowUp, Square, X, Image, Search, Mic, MicOff, Loader2, Plus } from "lucide-react";
 import { useVoice } from "@/hooks/useVoice";
+import { DialogTtsModal } from "@/components/DialogTtsModal";
 
 interface ChatInputProps {
   onSend: (message: string, images?: string[]) => void;
@@ -15,6 +16,7 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
   const [value, setValue] = useState("");
   const [imagePreviews, setImagePreviews] = useState<string[]>([]);
   const [deepSearchMode, setDeepSearchMode] = useState(false);
+  const [ttsOpen, setTtsOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -124,6 +126,14 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
         {/* Left buttons */}
         <div className="flex items-center pl-0.5 sm:pl-1">
           <button
+            onClick={() => setTtsOpen(true)}
+            className="btn-interactive flex-shrink-0 rounded-lg p-2 sm:p-2.5 text-muted-foreground transition-all"
+            title="Озвучка диалога"
+          >
+            <Plus style={{ width: "18px", height: "18px" }} />
+          </button>
+
+          <button
             onClick={() => fileInputRef.current?.click()}
             className="btn-interactive flex-shrink-0 rounded-lg p-2 sm:p-2.5 text-muted-foreground transition-all"
             title="Прикрепить изображения"
@@ -187,6 +197,8 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
           {isStreaming ? <Square className="h-3.5 w-3.5" fill="currentColor" /> : <ArrowUp className="h-4 w-4" />}
         </button>
       </div>
+
+      <DialogTtsModal open={ttsOpen} onClose={() => setTtsOpen(false)} />
 
       <p className="mt-1.5 sm:mt-2 text-center text-[11px] sm:text-xs text-muted-foreground">
         HikkoGPT может допускать ошибки. Проверяйте важную информацию.
