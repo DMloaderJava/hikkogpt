@@ -1,19 +1,17 @@
-import { useState, useRef, useEffect } from "react";
-import { X, Loader2, Volume2 } from "lucide-react";
+import { useState, useRef, useEffect, useMemo } from "react";
+import { X, Loader2, Volume2, Plus, Minus } from "lucide-react";
 import { getEdgeAuthHeaders } from "@/lib/edgeAuth";
 import { AudioPlayer } from "@/components/AudioPlayer";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 
 const VOICES = ["Charon", "Kore", "Puck", "Aoede", "Fenrir", "Leda", "Zephyr", "Orus"];
+const MAX_SPEAKERS = 8;
 
-const EXAMPLE = `Speaker 2: Я сказала тебе прекратить!
-
-Speaker 1: Ладно, ладно, понял.
-
-Speaker 2: Ты довольно забавный.
-
-Speaker 1: Ты о чём?`;
+const EXAMPLE = `Speaker 1: Ребята, начинаем?
+Speaker 2: Я сказала тебе прекратить!
+Speaker 3: Ладно, ладно, понял.
+Speaker 4: Вы оба довольно забавные.`;
 
 interface DialogTtsModalProps {
   open: boolean;
@@ -22,8 +20,17 @@ interface DialogTtsModalProps {
 
 export function DialogTtsModal({ open, onClose }: DialogTtsModalProps) {
   const [transcript, setTranscript] = useState("");
-  const [voice1, setVoice1] = useState("Charon");
-  const [voice2, setVoice2] = useState("Kore");
+  const [speakerCount, setSpeakerCount] = useState(2);
+  const [voices, setVoices] = useState<Record<string, string>>({
+    "1": "Charon",
+    "2": "Kore",
+    "3": "Puck",
+    "4": "Aoede",
+    "5": "Fenrir",
+    "6": "Leda",
+    "7": "Zephyr",
+    "8": "Orus",
+  });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
@@ -35,7 +42,23 @@ export function DialogTtsModal({ open, onClose }: DialogTtsModalProps) {
     };
   }, []);
 
+  // Auto-detect how many speakers the text actually uses
+  const detected = useMemo(() => {
+    const found = new Set<number>();
+    for (const m of transcript.matchAll(/^\s*Speaker\s*(\d{1,2})\s*:/gim)) {
+      const n = parseInt(m[1], 10);
+      if (n >= 1 && n <= MAX_SPEAKERS) found.add(n);
+    }
+    return [...found].sort((a, b) => a - b);
+  }, [transcript]);
+
+  useEffect(() => {
+    if (detected.length) setSpeakerCount(Math.max(2, Math.max(...detected)));
+  }, [detected]);
+
   if (!open) return null;
+
+  const slots = Array.from({ length: speakerCount }, (_, i) => String(i + 1));
 
   const generate = async () => {
     const text = transcript.trim();
@@ -46,7 +69,7 @@ export function DialogTtsModal({ open, onClose }: DialogTtsModalProps) {
       const res = await fetch(`${SUPABASE_URL}/functions/v1/dialog-tts`, {
         method: "POST",
         headers: { ...(await getEdgeAuthHeaders()), "Content-Type": "application/json" },
-        body: JSON.stringify({ transcript: text, voice1, voice2 }),
+        body: JSON.stringify({ transcript: text, voices }),
       });
       if (!res.ok) {
         let msg = "Не удалось озвучить диалог.";
@@ -82,8 +105,8 @@ export function DialogTtsModal({ open, onClose }: DialogTtsModalProps) {
         </div>
 
         <p className="mb-2 text-xs text-muted-foreground">
-          Каждая реплика с новой строки в формате <span className="text-foreground">Speaker 1:</span> или{" "}
-          <span className="text-foreground">Speaker 2:</span>
+          Каждая реплика с новой строки: <span className="text-foreground">Speaker 1:</span>,{" "}
+          <span className="text-foreground">Speaker 2:</span>, <span className="text-foreground">Speaker 3:</span> … до {MAX_SPEAKERS} голосов
         </p>
 
         <textarea
@@ -94,23 +117,42 @@ export function DialogTtsModal({ open, onClose }: DialogTtsModalProps) {
           className="w-full resize-none rounded-xl border border-border bg-secondary/50 p-3 text-sm text-foreground placeholder:text-muted-foreground/70 focus:border-interactive/40 focus:outline-none transition-all"
         />
 
-        <button
-          onClick={() => setTranscript(EXAMPLE)}
-          className="mt-1.5 text-xs text-interactive btn-interactive rounded-md px-1.5 py-0.5 transition-all"
-        >
-          Вставить пример
-        </button>
+        <div className="mt-1.5 flex items-center justify-between gap-2">
+          <button
+            onClick={() => setTranscript(EXAMPLE)}
+            className="text-xs text-interactive btn-interactive rounded-md px-1.5 py-0.5 transition-all"
+          >
+            Вставить пример
+          </button>
+
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-muted-foreground">Голосов: {speakerCount}</span>
+            <button
+              onClick={() => setSpeakerCount((n) => Math.max(2, n - 1))}
+              disabled={speakerCount <= 2}
+              className="btn-interactive rounded-lg p-1.5 text-muted-foreground transition-all disabled:opacity-40"
+              title="Убрать голос"
+            >
+              <Minus className="h-3.5 w-3.5" />
+            </button>
+            <button
+              onClick={() => setSpeakerCount((n) => Math.min(MAX_SPEAKERS, n + 1))}
+              disabled={speakerCount >= MAX_SPEAKERS}
+              className="btn-interactive rounded-lg p-1.5 text-muted-foreground transition-all disabled:opacity-40"
+              title="Добавить голос"
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
 
         <div className="mt-3 grid grid-cols-2 gap-2">
-          {[
-            { label: "Голос Speaker 1", value: voice1, set: setVoice1 },
-            { label: "Голос Speaker 2", value: voice2, set: setVoice2 },
-          ].map((s) => (
-            <label key={s.label} className="text-xs text-muted-foreground">
-              {s.label}
+          {slots.map((s) => (
+            <label key={s} className="text-xs text-muted-foreground animate-fade-in">
+              Голос Speaker {s}
               <select
-                value={s.value}
-                onChange={(e) => s.set(e.target.value)}
+                value={voices[s] ?? VOICES[0]}
+                onChange={(e) => setVoices((prev) => ({ ...prev, [s]: e.target.value }))}
                 className="mt-1 w-full rounded-lg border border-border bg-secondary/50 px-2 py-2 text-sm text-foreground focus:border-interactive/40 focus:outline-none transition-all"
               >
                 {VOICES.map((v) => (
@@ -120,6 +162,12 @@ export function DialogTtsModal({ open, onClose }: DialogTtsModalProps) {
             </label>
           ))}
         </div>
+
+        {speakerCount > 2 && (
+          <p className="mt-2 text-[11px] text-muted-foreground">
+            С 3 и более голосами реплики озвучиваются по очереди и склеиваются — это занимает немного больше времени.
+          </p>
+        )}
 
         {error && (
           <div className="mt-3 rounded-xl bg-destructive/10 px-3 py-2 text-xs text-destructive animate-slide-up">{error}</div>
