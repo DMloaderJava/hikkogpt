@@ -114,6 +114,27 @@ serve(async (req) => {
       });
     }
 
+    // Дневная квота сообщений (безлимит для почт из unlimited_emails)
+    try {
+      const admin = createClient(
+        Deno.env.get("SUPABASE_URL")!,
+        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+      );
+      const { data: allowed, error: quotaErr } = await admin.rpc("consume_message_quota", {
+        _user_id: userData.user.id,
+        _email: userData.user.email ?? "",
+        _daily_limit: 100,
+      });
+      if (!quotaErr && allowed === false) {
+        return new Response(
+          JSON.stringify({ error: "Достигнут дневной лимит сообщений. Попробуйте завтра." }),
+          { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+    } catch (e) {
+      console.warn("quota check skipped:", e);
+    }
+
     const { messages, model, thinking } = await req.json();
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
