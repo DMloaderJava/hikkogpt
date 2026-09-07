@@ -76,12 +76,48 @@ export type Database = {
           },
         ]
       }
+      unlimited_emails: {
+        Row: {
+          created_at: string
+          email: string
+        }
+        Insert: {
+          created_at?: string
+          email: string
+        }
+        Update: {
+          created_at?: string
+          email?: string
+        }
+        Relationships: []
+      }
+      usage_counters: {
+        Row: {
+          day: string
+          message_count: number
+          user_id: string
+        }
+        Insert: {
+          day?: string
+          message_count?: number
+          user_id: string
+        }
+        Update: {
+          day?: string
+          message_count?: number
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      consume_message_quota: {
+        Args: { _daily_limit?: number; _email: string; _user_id: string }
+        Returns: boolean
+      }
     }
     Enums: {
       [_ in never]: never
