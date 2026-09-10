@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Plus, MessageSquare, Trash2, Pencil, Check, X, Sparkles } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Plus, MessageSquare, Trash2, Pencil, Check, X, Sparkles, Search } from "lucide-react";
 import type { Chat } from "@/hooks/useChat";
 
 interface ChatSidebarProps {
@@ -17,11 +17,13 @@ function groupChatsByDate(chats: Chat[]) {
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const yesterday = new Date(today.getTime() - 86400000);
   const week = new Date(today.getTime() - 7 * 86400000);
+  const month = new Date(today.getTime() - 30 * 86400000);
 
   const groups: { label: string; chats: Chat[] }[] = [
     { label: "Сегодня", chats: [] },
     { label: "Вчера", chats: [] },
-    { label: "Последние 7 дней", chats: [] },
+    { label: "Прошлая неделя", chats: [] },
+    { label: "Прошлый месяц", chats: [] },
     { label: "Ранее", chats: [] },
   ];
 
@@ -30,10 +32,17 @@ function groupChatsByDate(chats: Chat[]) {
     if (d >= today) groups[0].chats.push(chat);
     else if (d >= yesterday) groups[1].chats.push(chat);
     else if (d >= week) groups[2].chats.push(chat);
-    else groups[3].chats.push(chat);
+    else if (d >= month) groups[3].chats.push(chat);
+    else groups[4].chats.push(chat);
   });
 
   return groups.filter((g) => g.chats.length > 0);
+}
+
+function matches(chat: Chat, q: string) {
+  const needle = q.toLowerCase();
+  if (chat.title.toLowerCase().includes(needle)) return true;
+  return (chat.messages || []).some((m) => m.content?.toLowerCase().includes(needle));
 }
 
 export function ChatSidebar({
@@ -47,8 +56,14 @@ export function ChatSidebar({
 }: ChatSidebarProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
+  const [query, setQuery] = useState("");
 
-  const groups = groupChatsByDate(chats);
+  const filtered = useMemo(
+    () => (query.trim() ? chats.filter((c) => matches(c, query.trim())) : chats),
+    [chats, query]
+  );
+
+  const groups = groupChatsByDate(filtered);
 
   const startEditing = (chat: Chat) => {
     setEditingId(chat.id);
@@ -79,20 +94,43 @@ export function ChatSidebar({
         </button>
       </div>
 
+      {/* Search */}
+      <div className="px-3 pb-2 animate-fade-in">
+        <div className="flex items-center gap-2 rounded-lg bg-sidebar-accent/50 px-2.5 py-1.5 transition-all focus-within:bg-sidebar-accent focus-within:ring-1 focus-within:ring-interactive/50">
+          <Search className="h-3.5 w-3.5 flex-shrink-0 opacity-60" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Поиск по чатам"
+            className="w-full bg-transparent text-xs outline-none placeholder:text-muted-foreground"
+          />
+          {query && (
+            <button
+              onClick={() => setQuery("")}
+              className="btn-interactive rounded p-0.5 transition-all"
+              title="Очистить"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+      </div>
+
       {/* Chat list */}
       <div className="flex-1 overflow-y-auto px-2 scrollbar-thin">
         {groups.map((group) => (
-          <div key={group.label} className="mb-3">
+          <div key={group.label} className="mb-3 animate-fade-in">
             <p className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
               {group.label}
             </p>
-            {group.chats.map((chat) => (
+            {group.chats.map((chat, idx) => (
               <div
                 key={chat.id}
-                className={`group flex items-center gap-2 rounded-lg px-2 py-2 text-sm cursor-pointer transition-all duration-150 ${
+                style={{ animationDelay: `${Math.min(idx, 8) * 25}ms` }}
+                className={`group flex items-center gap-2 rounded-lg px-2 py-2 text-sm cursor-pointer transition-all duration-150 animate-fade-in-up ${
                   chat.id === activeChatId
                     ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                    : "hover:bg-sidebar-accent/50"
+                    : "hover:bg-sidebar-accent/50 hover:translate-x-0.5"
                 }`}
                 onClick={() => onSelectChat(chat.id)}
               >
@@ -117,7 +155,7 @@ export function ChatSidebar({
                 ) : (
                   <>
                     <span className="flex-1 truncate">{chat.title}</span>
-                    <div className="hidden items-center gap-0.5 group-hover:flex">
+                    <div className="hidden items-center gap-0.5 group-hover:flex animate-fade-in">
                       <button
                         onClick={(e) => { e.stopPropagation(); startEditing(chat); }}
                         className="btn-interactive rounded p-1 transition-all"
@@ -138,9 +176,9 @@ export function ChatSidebar({
           </div>
         ))}
 
-        {chats.length === 0 && (
-          <p className="px-4 py-8 text-center text-xs text-muted-foreground">
-            Нет сохранённых чатов
+        {filtered.length === 0 && (
+          <p className="px-4 py-8 text-center text-xs text-muted-foreground animate-fade-in">
+            {query ? "Ничего не найдено" : "Нет сохранённых чатов"}
           </p>
         )}
       </div>
