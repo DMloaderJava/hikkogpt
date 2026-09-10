@@ -59,7 +59,22 @@ export class MockGainNode extends MockAudioNode {
 export class MockAnalyserNode extends MockAudioNode {
   fftSize = 2048;
   smoothingTimeConstant = 0.8;
-  frequencyBinCount = this.fftSize / 2;
+  /** Значение, которым мок заполняет спектр (0 — тишина). */
+  frequencyValue = 0;
+  /** Значение осциллограммы при тишине — центр беззнакового байта. */
+  waveformValue = 128;
+
+  get frequencyBinCount(): number {
+    return this.fftSize / 2;
+  }
+
+  getByteFrequencyData(target: Uint8Array): void {
+    target.fill(this.frequencyValue);
+  }
+
+  getByteTimeDomainData(target: Uint8Array): void {
+    target.fill(this.waveformValue);
+  }
 }
 
 export class MockAudioBuffer {

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AudioPlaybackEngine, createBrowserAudioContext } from "@/lib/audioEngine";
 import { isSoundEffect, type SoundboardPlayer } from "@/lib/soundboard";
+import { VoiceActivityTracker } from "@/lib/voiceActivity";
+import { announceStopSpeech } from "@/lib/speechEvents";
 import { supabase } from "@/integrations/supabase/client";
 import {
   DEFAULT_LIVE_MODEL,
@@ -30,6 +32,11 @@ export interface UseGeminiLiveOptions {
   systemInstruction?: string;
   /** Запасная модель, если прокси не прислал `proxyInfo`. */
   model?: string;
+  /**
+   * Локальный детектор речи: по нему UI показывает «Думаю…» после вашей фразы
+   * (Gemini Live не присылает события «пользователь замолчал»).
+   */
+  detectUserSpeech?: boolean;
   onSoundTriggered?: (soundName: SoundEffectType) => void;
   onError?: (error: string) => void;
   onConnectionChange?: (status: ConnectionStatus) => void;
@@ -72,6 +79,7 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}) {
     voiceName = "Puck",
     systemInstruction = VOICE_SYSTEM_INSTRUCTION,
     model = DEFAULT_LIVE_MODEL,
+    detectUserSpeech = true,
     onSoundTriggered,
     onError,
     onConnectionChange,
@@ -82,6 +90,7 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}) {
   const [isMuted, setIsMuted] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [analyser, setAnalyser] = useState<AnalyserNode | null>(null);
+  const [inputAnalyser, setInputAnalyser] = useState<AnalyserNode | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const engineRef = useRef<AudioPlaybackEngine | null>(null);
@@ -97,6 +106,9 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}) {
   const setupSentRef = useRef(false);
   const readyRef = useRef(false);
   const preRollRef = useRef<string[]>([]);
+  const vadRef = useRef<VoiceActivityTracker | null>(null);
+  /** Когда модель последний раз что-то делала — чтобы VAD не «думал» после ответа. */
+  const lastModelActivityRef = useRef(0);
 
   // Колбэки в рефе: connect() не должен пересобираться при их смене.
   const callbacksRef = useRef({ onSoundTriggered, onError, onConnectionChange });
@@ -156,8 +168,10 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}) {
     const engine = engineRef.current;
     engineRef.current = null;
     setAnalyser(null);
+    setInputAnalyser(null);
     if (engine) await engine.close();
 
+    vadRef.current?.reset();
     setupSentRef.current = false;
     readyRef.current = false;
     preRollRef.current = [];
@@ -233,6 +247,22 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}) {
       workletNode.connect(silentGain);
       silentGain.connect(micCtx.destination);
 
+      // Анализатор микрофона: рисуем на сфере, как звучит ваш голос.
+      const micAnalyser = micCtx.createAnalyser();
+      micAnalyser.fftSize = 256;
+      micAnalyser.smoothingTimeConstant = 0.75;
+      micSource.connect(micAnalyser);
+      // Через тот же нулевой гейн: так узел гарантированно остаётся в графе.
+      micAnalyser.connect(silentGain);
+      setInputAnalyser(micAnalyser);
+
+      if (detectUserSpeech) vadRef.current = new VoiceActivityTracker();
+      else vadRef.current = null;
+
+      // Озвучка сообщений чата — отдельный <audio> в MessageBubble: глушим его,
+      // иначе два голоса заговорят одновременно.
+      announceStopSpeech();
+
       // 4. Сокет
       const wsUrl = `${supabaseUrl.replace(/^http/, "ws")}/functions/v1/gemini-live?token=${encodeURIComponent(accessToken)}`;
       const ws = new WebSocket(wsUrl);
@@ -281,7 +311,23 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}) {
       };
 
       workletNode.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
-        sendAudio(arrayBufferToBase64(event.data));
+        const buffer = event.data;
+        sendAudio(arrayBufferToBase64(buffer));
+
+        // Локальный VAD: Gemini Live не сообщает, что пользователь замолчал,
+        // поэтому «Думаю…» показываем сами — по паузе после речи.
+        const vad = vadRef.current;
+        if (!vad || !readyRef.current || mutedRef.current) return;
+
+        const activity = vad.push(new Int16Array(buffer));
+        if (activity === "speech-start") {
+          if (!engine.isPlaying) setAgentState("listening");
+        } else if (activity === "speech-end" && !engine.isPlaying) {
+          // «Думаю…» уместно, только если модель ещё не ответила на эту фразу
+          // (быстрый короткий ответ мог целиком уложиться в паузу).
+          const quietSinceModel = performance.now() - lastModelActivityRef.current > 600;
+          if (quietSinceModel) setAgentState("thinking");
+        }
       };
 
       ws.onopen = () => {
@@ -339,6 +385,7 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}) {
         // Г) Контент модели: речь, перебивание, конец реплики
         if (message.serverContent) {
           const { interrupted, modelTurn, turnComplete } = message.serverContent;
+          lastModelActivityRef.current = performance.now();
 
           if (interrupted) {
             // Barge-in: обрываем и речь, и звучащий эффект
@@ -418,7 +465,7 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}) {
       setStatus("error");
       callbacks.onError?.(text);
     }
-  }, [cleanup, model, systemInstruction, voiceName]);
+  }, [cleanup, detectUserSpeech, model, systemInstruction, voiceName]);
 
   const toggleMute = useCallback(() => {
     setIsMuted((prev) => {
@@ -445,6 +492,8 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}) {
     errorMessage,
     /** Для VoiceVisualizer: analyser общей шины (речь + эффекты). */
     analyser,
+    /** Анализатор микрофона — внешнее кольцо «ваш голос». */
+    inputAnalyser,
     connect,
     disconnect,
     toggleMute,

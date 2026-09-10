@@ -1,3 +1,4 @@
+import { useEffect, useState, type ComponentType } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -13,6 +14,18 @@ const queryClient = new QueryClient();
 
 function AppRoutes() {
   const { user, loading } = useAuth();
+  const [DevPreview, setDevPreview] = useState<ComponentType | null>(null);
+
+  // Дев-стенд сферы по хэшу #voice-preview (см. components/dev). В production
+  // ветка вырезается целиком вместе с динамическим импортом.
+  useEffect(() => {
+    if (!import.meta.env.DEV || window.location.hash !== "#voice-preview") return;
+    void import("@/components/dev/VoiceVisualizerDemo").then((mod) =>
+      setDevPreview(() => mod.VoiceVisualizerDemo)
+    );
+  }, []);
+
+  if (DevPreview) return <DevPreview />;
 
   if (loading) {
     return (

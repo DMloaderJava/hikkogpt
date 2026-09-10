@@ -10,6 +10,14 @@ export const SOUND_PATHS: Record<SoundEffectType, string> = {
 
 export const SOUND_EFFECTS = Object.keys(SOUND_PATHS) as SoundEffectType[];
 
+/** Человеческие подписи для UI (например, вспышки «Свисток судьи» в голосовом режиме). */
+export const SOUND_LABELS: Record<SoundEffectType, string> = {
+  referee_whistle: "Свисток судьи",
+  belly_laugh: "Басовитый хохот",
+  wheeze_laugh: "Истерический смех",
+  creepy_slow_laugh: "Мрачный смех",
+};
+
 /** Проверка аргумента, который прилетел от модели в function call. */
 export function isSoundEffect(value: unknown): value is SoundEffectType {
   return typeof value === "string" && value in SOUND_PATHS;

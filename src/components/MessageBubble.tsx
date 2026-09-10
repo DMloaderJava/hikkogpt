@@ -1,6 +1,7 @@
 import { Copy, ThumbsUp, ThumbsDown, RotateCcw, Volume2, VolumeX, Pencil, Sparkles, ChevronDown, ChevronRight, Brain } from "lucide-react";
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import type { Message } from "@/hooks/useChat";
+import { STOP_SPEECH_EVENT } from "@/lib/speechEvents";
 import { getEdgeAuthHeaders } from "@/lib/edgeAuth";
 import { CodeBlock } from "@/components/CodeBlock";
 
@@ -75,6 +76,16 @@ function useTTS() {
     }
     setS("idle");
   }, []);
+
+  // Голосовой режим Gemini Live стартует — глушим озвучку сообщений, иначе
+  // пользователь услышит два голоса одновременно.
+  useEffect(() => {
+    const onStopSpeech = () => {
+      if (stateRef.current !== "idle") stop();
+    };
+    window.addEventListener(STOP_SPEECH_EVENT, onStopSpeech);
+    return () => window.removeEventListener(STOP_SPEECH_EVENT, onStopSpeech);
+  }, [stop]);
 
   return { state, speak, stop };
 }

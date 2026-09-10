@@ -14,6 +14,22 @@ export type VoiceAgentState = "idle" | "listening" | "thinking" | "speaking";
 
 export type PrebuiltVoiceName = "Puck" | "Charon" | "Aoede" | "Fenrir" | "Kore";
 
+export const LIVE_VOICE_NAMES: PrebuiltVoiceName[] = ["Puck", "Charon", "Aoede", "Fenrir", "Kore"];
+
+/**
+ * В настройках голос хранится строкой из списка TTS — там есть Leda, которой в
+ * Gemini Live нет. Неизвестное имя превращаем в допустимое, иначе Google
+ * отвергнет setup.
+ */
+export function resolveLiveVoiceName(
+  value: string | null | undefined,
+  fallback: PrebuiltVoiceName = "Aoede"
+): PrebuiltVoiceName {
+  return LIVE_VOICE_NAMES.includes(value as PrebuiltVoiceName)
+    ? (value as PrebuiltVoiceName)
+    : fallback;
+}
+
 export interface FunctionDeclaration {
   name: string;
   description: string;

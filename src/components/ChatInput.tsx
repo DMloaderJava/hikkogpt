@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from "react";
-import { ArrowUp, Square, X, Image, Search, Mic, MicOff, Loader2, Plus } from "lucide-react";
+import { ArrowUp, Square, X, Image, Search, Mic, MicOff, Loader2, Plus, AudioLines } from "lucide-react";
 import { useVoice } from "@/hooks/useVoice";
 import { DialogTtsModal } from "@/components/DialogTtsModal";
+import type { ConnectionStatus } from "@/types/gemini-live";
 
 interface ChatInputProps {
   onSend: (message: string, images?: string[]) => void;
@@ -10,9 +11,12 @@ interface ChatInputProps {
   deepSearchEnabled?: boolean;
   deepSearchUsed?: boolean;
   onDeepSearch?: (query: string) => void;
+  /** Голосовой режим Gemini Live: статус и переключатель (кнопка AudioLines). */
+  voiceModeStatus?: ConnectionStatus;
+  onToggleVoiceMode?: () => void;
 }
 
-export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = true, deepSearchUsed = false, onDeepSearch }: ChatInputProps) {
+export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = true, deepSearchUsed = false, onDeepSearch, voiceModeStatus, onToggleVoiceMode }: ChatInputProps) {
   const [value, setValue] = useState("");
   const [imagePreviews, setImagePreviews] = useState<string[]>([]);
   const [deepSearchMode, setDeepSearchMode] = useState(false);
@@ -72,6 +76,7 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
 
   const isListening = voiceState === "listening";
   const isProcessing = voiceState === "processing";
+  const isVoiceModeActive = voiceModeStatus === "connected" || voiceModeStatus === "connecting";
   const canAddMore = imagePreviews.length < 5;
 
   return (
@@ -156,6 +161,23 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
             </button>
           )}
 
+          {onToggleVoiceMode && (
+            <button
+              onClick={onToggleVoiceMode}
+              className={`relative flex-shrink-0 rounded-lg p-2 sm:p-2.5 transition-all ${
+                isVoiceModeActive ? "text-interactive bg-interactive/10"
+                : "btn-interactive text-muted-foreground"
+              }`}
+              title={isVoiceModeActive ? "Открыть голосовой режим" : "Голосовой режим Gemini Live"}
+            >
+              <AudioLines style={{ width: "18px", height: "18px" }} />
+              {isVoiceModeActive && (
+                <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-interactive animate-pulse" />
+              )}
+            </button>
+          )}
+
+          {/* Диктовка (распознать текст) — отдельный от голосового режима путь */}
           {voiceSupported && (
             <button
               onClick={toggleVoice}
