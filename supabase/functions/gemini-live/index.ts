@@ -64,6 +64,16 @@ Deno.serve(async (req) => {
 
     ws.onopen = () => {
       openedOnce = true;
+      // Сообщаем клиенту, какая модель реально открылась (ключи/модели
+      // ротируются), и только после этого он шлёт setup — так setup.model не
+      // разъедется с model в URL апстрима.
+      try {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(JSON.stringify({ proxyInfo: { model } }));
+        }
+      } catch (e) {
+        console.error("proxyInfo -> client failed", e);
+      }
       while (pending.length) {
         const msg = pending.shift();
         if (msg) ws.send(msg);

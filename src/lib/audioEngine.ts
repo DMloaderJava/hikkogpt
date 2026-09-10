@@ -89,7 +89,7 @@ export class AudioPlaybackEngine {
   constructor(options: AudioPlaybackEngineOptions = {}) {
     this.sampleRate = options.sampleRate ?? GEMINI_OUTPUT_SAMPLE_RATE;
     this.ownsContext = !options.audioContext;
-    this.ctx = options.audioContext ?? createAudioContext(this.sampleRate);
+    this.ctx = options.audioContext ?? createBrowserAudioContext({ sampleRate: this.sampleRate });
 
     this.masterGain = this.ctx.createGain();
     this.masterGain.gain.value = clamp01(options.volume ?? 1, 1);
@@ -248,15 +248,20 @@ export class AudioPlaybackEngine {
   }
 }
 
-function createAudioContext(sampleRate: number): AudioContext {
-  const Ctor = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+/**
+ * Создаёт AudioContext: поддержка webkit-префикса + фолбэк на нативные
+ * настройки, если браузер не принял переданные (не все принимают произвольную
+ * sampleRate или latencyHint).
+ */
+export function createBrowserAudioContext(options: AudioContextOptions = {}): AudioContext {
+  const Ctor =
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!Ctor) throw new Error("Web Audio API не поддерживается этим браузером");
 
   try {
-    return new Ctor({ sampleRate });
+    return new Ctor(options);
   } catch {
-    // Не все браузеры принимают произвольную частоту — играем на нативной,
-    // ресемплинг буферов Web Audio делает сам.
     return new Ctor();
   }
 }

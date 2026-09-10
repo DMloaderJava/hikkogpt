@@ -59,6 +59,8 @@ export interface LiveServerMessage {
   setupComplete?: Record<string, never>;
   toolCall?: LiveToolCall;
   proxyError?: string;
+  /** Прокси сообщает, на какой модели реально поднялась сессия (см. gemini-live). */
+  proxyInfo?: LiveProxyInfo;
   serverContent?: {
     interrupted?: boolean;
     turnComplete?: boolean;
@@ -67,6 +69,42 @@ export interface LiveServerMessage {
     };
   };
 }
+
+/** Фрейм прокси: фактически открытая модель (после ротации ключей/моделей). */
+export interface LiveProxyInfo {
+  model: string;
+}
+
+export interface LiveSetupMessage {
+  setup: BidiLiveConfig["setup"];
+}
+
+export interface LiveRealtimeInputMessage {
+  realtimeInput: {
+    mediaChunks: Array<{
+      mimeType: "audio/pcm;rate=16000";
+      /** Base64 от Int16 PCM little-endian. */
+      data: string;
+    }>;
+  };
+}
+
+export interface LiveToolResponse {
+  toolResponse: {
+    functionResponses: Array<{
+      id?: string;
+      name?: string;
+      response: { output: Record<string, unknown> };
+    }>;
+  };
+}
+
+/**
+ * Модель для `setup`, если прокси по какой-то причине не прислал `proxyInfo`
+ * (например, ещё не задеплоен патч). Держите в согласии с первым элементом
+ * MODELS в supabase/functions/gemini-live/index.ts.
+ */
+export const DEFAULT_LIVE_MODEL = "models/gemini-2.0-flash-live-001";
 
 export const PLAY_SOUND_TOOL: FunctionDeclaration = {
   name: "play_sound",
