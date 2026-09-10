@@ -2,6 +2,7 @@ import { Copy, ThumbsUp, ThumbsDown, RotateCcw, Volume2, VolumeX, Pencil, Sparkl
 import { useState, useRef, useCallback } from "react";
 import type { Message } from "@/hooks/useChat";
 import { getEdgeAuthHeaders } from "@/lib/edgeAuth";
+import { CodeBlock } from "@/components/CodeBlock";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 
@@ -236,23 +237,7 @@ function renderContent(content: string) {
 
   const flushCode = () => {
     const code = codeLines.join("\n");
-    parts.push(
-      <div key={key++} className="my-3 rounded-lg overflow-hidden animate-fade-in-up">
-        <div className="flex items-center justify-between bg-code-block-header px-3 sm:px-4 py-2 text-xs text-code-block-foreground">
-          <span>{codeLang || "code"}</span>
-          <button
-            onClick={() => navigator.clipboard.writeText(code)}
-            className="flex items-center gap-1 btn-interactive rounded px-1.5 py-0.5 transition-all"
-          >
-            <Copy className="h-3.5 w-3.5" />
-            Copy
-          </button>
-        </div>
-        <pre className="bg-code-block p-3 sm:p-4 overflow-x-auto text-xs sm:text-sm">
-          <code className="text-code-block-foreground">{code}</code>
-        </pre>
-      </div>
-    );
+    parts.push(<CodeBlock key={key++} code={code} lang={codeLang} />);
     codeLines = [];
     codeLang = "";
   };
