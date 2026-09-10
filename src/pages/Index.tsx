@@ -1,17 +1,22 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Menu, Brain, X, SquarePen, Settings, ChevronDown } from "lucide-react";
+import { toast } from "@/components/ui/sonner";
 import { ChatSidebar } from "@/components/ChatSidebar";
 import { ChatInput } from "@/components/ChatInput";
+import { VoiceModeOverlay } from "@/components/VoiceModeOverlay";
 import { MessageBubble } from "@/components/MessageBubble";
 import { EmptyState } from "@/components/EmptyState";
 import { ModelSelector } from "@/components/ModelSelector";
 import { DeepSearchPanel } from "@/components/DeepSearchPanel";
 import { SettingsPanel } from "@/components/SettingsPanel";
 import { useChat } from "@/hooks/useChat";
+import { useGeminiLive } from "@/hooks/useGeminiLive";
 import { useDeepSearch } from "@/hooks/useDeepSearch";
 import { useTheme } from "@/hooks/useTheme";
 import { useAuth } from "@/hooks/useAuth";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { resolveLiveVoiceName } from "@/types/gemini-live";
+import type { SoundEffectType } from "@/types/gemini-live";
 
 const Index = () => {
   const {
@@ -31,6 +36,17 @@ const Index = () => {
   const [deepSearchQuery, setDeepSearchQuery] = useState("");
   const [ttsVoice, setTtsVoice] = useState(() => localStorage.getItem("tts-voice") || "Aoede");
   const [showScrollBtn, setShowScrollBtn] = useState(false);
+  const [lastSound, setLastSound] = useState<SoundEffectType | null>(null);
+
+  const live = useGeminiLive({
+    voiceName: resolveLiveVoiceName(ttsVoice),
+    onSoundTriggered: setLastSound,
+    onConnectionChange: (next) => {
+      if (next === "connected") toast.success("Голосовой режим подключён — говорите");
+    },
+    onError: (message) => toast.error(message),
+  });
+  const voiceModeActive = live.status !== "disconnected";
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -42,6 +58,15 @@ const Index = () => {
     setTtsVoice(v);
     localStorage.setItem("tts-voice", v);
   };
+
+  const handleToggleVoiceMode = useCallback(() => {
+    if (live.status === "disconnected" || live.status === "error") {
+      setLastSound(null);
+      void live.connect();
+    } else {
+      live.disconnect();
+    }
+  }, [live]);
 
   useEffect(() => {
     if (!isMobile) setSidebarOpen(true);
@@ -318,11 +343,29 @@ const Index = () => {
             onStop={isDeepSearchActive ? stopSearch : stopStreaming}
             deepSearchUsed={deepSearch.used}
             onDeepSearch={handleDeepSearch}
+            voiceModeStatus={live.status}
+            onToggleVoiceMode={handleToggleVoiceMode}
           />
         </div>
       </div>
 
       {/* Settings panel */}
+      {voiceModeActive && (
+        <VoiceModeOverlay
+          status={live.status}
+          agentState={live.agentState}
+          analyser={live.analyser}
+          inputAnalyser={live.inputAnalyser}
+          isMuted={live.isMuted}
+          errorMessage={live.errorMessage}
+          lastSound={lastSound}
+          voiceName={resolveLiveVoiceName(ttsVoice)}
+          onToggleMute={live.toggleMute}
+          onReconnect={handleToggleVoiceMode}
+          onClose={live.disconnect}
+        />
+      )}
+
       <SettingsPanel
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
