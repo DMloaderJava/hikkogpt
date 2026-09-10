@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, cleanup, screen } from "@testing-library/react";
 import { VoiceVisualizer } from "@/components/VoiceVisualizer";
+import { ORB_BAR_COUNT, ORB_GEOMETRY, drawOrbFrame } from "@/lib/orbRenderer";
+import { ORB_FALLBACK_HUES } from "@/lib/audioVisualization";
 import { MockAnalyserNode } from "./webAudioMock";
 
 /**
@@ -180,5 +182,87 @@ describe("VoiceVisualizer", () => {
       render(<VoiceVisualizer analyser={null} state="idle" />);
       raf.flush(1);
     }).not.toThrow();
+  });
+});
+
+describe("drawOrbFrame: кадр сферы как чистая функция", () => {
+  let stub: StubContext;
+
+  beforeEach(() => {
+    stub = installCanvasStub();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  const frame = (overrides: Partial<Parameters<typeof drawOrbFrame>[0]> = {}) => {
+    const ctx = (document.createElement("canvas").getContext("2d") as unknown) as CanvasRenderingContext2D;
+    const params: Parameters<typeof drawOrbFrame>[0] = {
+      ctx,
+      size: 240,
+      state: "speaking",
+      hues: ORB_FALLBACK_HUES.speaking,
+      bars: new Float32Array(ORB_BAR_COUNT).fill(0.6),
+      level: 0.7,
+      micLevel: 0,
+      timeMs: 350,
+      motion: true,
+      idle: 0.5,
+      ...overrides,
+    };
+    drawOrbFrame(params);
+    return params;
+  };
+
+  it("рисует по столбику на каждую дорожку", () => {
+    frame();
+    expect(stub.calls.stroke).toBeGreaterThanOrEqual(ORB_BAR_COUNT);
+  });
+
+  it("ядро рисуется всегда, кольцо микрофона — только при голосе", () => {
+    stub.calls.stroke = 0;
+    frame({ micLevel: 0 });
+    const strokesWithoutMic = stub.calls.stroke;
+
+    stub.calls.stroke = 0;
+    frame({ micLevel: 0.5 });
+    const strokesWithMic = stub.calls.stroke;
+
+    // тишина в микрофоне не должна рисовать внешнее кольцо
+    expect(strokesWithMic).toBeGreaterThan(strokesWithoutMic - ORB_BAR_COUNT + 1);
+    expect(stub.calls.arc).toBeGreaterThan(0);
+  });
+
+  it("дуги «думаю» рисуются только в состоянии thinking", () => {
+    stub.calls.arc = 0;
+    frame({ state: "listening" });
+    const arcsListening = stub.calls.arc;
+
+    stub.calls.arc = 0;
+    frame({ state: "thinking" });
+    const arcsThinking = stub.calls.arc;
+
+    expect(arcsThinking).toBeGreaterThan(arcsListening);
+  });
+
+  it("при уменьшенной анимации рисует тот же кадр (без вращения)", () => {
+    const withMotion = frame({ motion: true });
+    const withoutMotion = frame({ motion: false });
+
+    expect(withMotion.bars.length).toBe(withoutMotion.bars.length);
+    expect(stub.calls.clearRect).toBeGreaterThan(0);
+  });
+
+  it("столбики и кольцо микрофона вписываются в квадрат холста", () => {
+    // Константы — множители радиуса ядра (а он доля стороны холста).
+    const base = ORB_GEOMETRY.baseRadius;
+    const barsOuter = base * (ORB_GEOMETRY.barInner + ORB_GEOMETRY.barLength);
+    const micOuter = base * ORB_GEOMETRY.micRing + 0.02; // + половина максимальной толщины
+
+    expect(ORB_GEOMETRY.micRing).toBeGreaterThan(ORB_GEOMETRY.barInner);
+    expect(barsOuter).toBeLessThan(0.5);
+    expect(micOuter).toBeLessThan(0.5);
   });
 });

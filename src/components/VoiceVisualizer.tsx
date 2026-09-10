@@ -2,10 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import type { VoiceAgentState } from "@/types/gemini-live";
 import {
   ORB_FALLBACK_HUES,
-  TAU,
   breath,
   computeLevel,
-  hslColor,
   parseHue,
   prefersReducedMotion,
   sampleBars,
@@ -13,8 +11,9 @@ import {
   smoothTowards,
   type OrbHues,
 } from "@/lib/audioVisualization";
+import { ORB_BAR_COUNT, drawOrbFrame } from "@/lib/orbRenderer";
 
-const BAR_COUNT = 64;
+const BAR_COUNT = ORB_BAR_COUNT;
 const DEFAULT_SIZE = 232;
 
 export interface VoiceVisualizerProps {
@@ -105,11 +104,7 @@ export function VoiceVisualizer({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     const reducedMotion = prefersReducedMotion();
-    const motion = reducedMotion ? 0 : 1;
-    const center = size / 2;
-    const baseRadius = size * 0.27;
-    const barInner = baseRadius * 1.06;
-    const barMax = baseRadius * 0.62;
+    const motion = !reducedMotion;
 
     const bars = new Float32Array(BAR_COUNT);
     const target = new Float32Array(BAR_COUNT);
@@ -127,10 +122,9 @@ export function VoiceVisualizer({
       if (startedAt === 0) startedAt = now;
 
       const agentState = stateRef.current;
-      const hues = huesRef.current;
       const time = now - startedAt;
 
-      // 1. Тянем данные из анализаторов (никакого React-состояния в кадре)
+      // 1. Данные из анализаторов — без состояния React
       let targetLevel = 0;
       if (analyser && frequencyData && waveformData) {
         analyser.getByteFrequencyData(frequencyData);
@@ -150,85 +144,19 @@ export function VoiceVisualizer({
       }
       micLevel = smoothTowards(micLevel, agentState === "speaking" ? 0 : targetMic, 0.3);
 
-      const idle = reducedMotion ? 0.5 : breath(time, 4200);
-      const idleAmplitude = agentState === "idle" ? 0.05 : 0.03;
-
-      ctx.clearRect(0, 0, size, size);
-
-      // 2. Мягкое свечение вокруг
-      const glowRadius = baseRadius * (1.5 + level * 0.5 + idle * idleAmplitude * motion);
-      const glow = ctx.createRadialGradient(center, center, baseRadius * 0.15, center, center, glowRadius);
-      glow.addColorStop(0, hslColor(hues.base, 92, 62, 0.32 + level * 0.28));
-      glow.addColorStop(0.6, hslColor(hues.accent, 92, 58, 0.12 + level * 0.16));
-      glow.addColorStop(1, hslColor(hues.accent, 92, 58, 0));
-      ctx.fillStyle = glow;
-      ctx.beginPath();
-      ctx.arc(center, center, glowRadius, 0, TAU);
-      ctx.fill();
-
-      // 3. Частотное кольцо из столбиков
-      const aliveFloor = agentState === "idle" ? 0.02 : 0.07;
-      ctx.lineCap = "round";
-      ctx.lineWidth = Math.max(1.5, size * 0.008);
-
-      for (let i = 0; i < BAR_COUNT; i++) {
-        const magnitude = Math.max(bars[i], aliveFloor * (0.6 + 0.4 * idle * motion));
-        const length = barMax * (0.18 + 0.82 * magnitude);
-        const angle = (i / BAR_COUNT) * TAU - Math.PI / 2;
-        const cos = Math.cos(angle);
-        const sin = Math.sin(angle);
-
-        ctx.strokeStyle = hslColor(
-          hues.accent,
-          90,
-          agentState === "idle" ? 55 : 64,
-          0.22 + magnitude * 0.7
-        );
-        ctx.beginPath();
-        ctx.moveTo(center + cos * barInner, center + sin * barInner);
-        ctx.lineTo(center + cos * (barInner + length), center + sin * (barInner + length));
-        ctx.stroke();
-      }
-
-      // 4. Ядро сферы
-      const coreRadius = baseRadius * (0.92 + level * 0.16 + idle * 0.02 * motion);
-      const core = ctx.createRadialGradient(
-        center - coreRadius * 0.28,
-        center - coreRadius * 0.32,
-        coreRadius * 0.12,
-        center,
-        center,
-        coreRadius
-      );
-      core.addColorStop(0, hslColor(hues.base, 96, 76, 0.96));
-      core.addColorStop(0.62, hslColor(hues.base, 88, 56, 0.9));
-      core.addColorStop(1, hslColor(hues.accent, 86, 44, 0.82));
-      ctx.fillStyle = core;
-      ctx.beginPath();
-      ctx.arc(center, center, coreRadius, 0, TAU);
-      ctx.fill();
-
-      // 5. «Думаю» — вращающиеся дуги вокруг ядра
-      if (agentState === "thinking") {
-        const rotation = reducedMotion ? 0 : (time / 1400) * TAU;
-        ctx.strokeStyle = hslColor(hues.accent, 92, 68, 0.55);
-        ctx.lineWidth = Math.max(2, size * 0.012);
-        for (let i = 0; i < 2; i++) {
-          const start = rotation + i * Math.PI;
-          ctx.beginPath();
-          ctx.arc(center, center, coreRadius * 1.22, start, start + Math.PI * 0.42);
-          ctx.stroke();
-        }
-      }
-
-      // 6. Кольцо микрофона: видно, как звучит ваш голос
-      if (micLevel > 0.015) {
-        ctx.strokeStyle = hslColor(hues.accent, 95, 70, Math.min(0.75, 0.18 + micLevel * 1.6));
-        ctx.lineWidth = Math.max(1.5, size * 0.01 * (1 + micLevel * 3));
-        ctx.beginPath();
-        ctx.arc(center, center, baseRadius * 1.62, 0, TAU);
-        ctx.stroke();
-      }
+      // 2. Сам кадр — чистая функция (см. lib/orbRenderer)
+      drawOrbFrame({
+        ctx,
+        size,
+        state: agentState,
+        hues: huesRef.current,
+        bars,
+        level,
+        micLevel,
+        timeMs: time,
+        motion,
+        idle: reducedMotion ? 0.5 : breath(time, 4200),
+      });
     };
 
     raf = requestAnimationFrame(draw);
