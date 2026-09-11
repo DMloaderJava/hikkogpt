@@ -54,13 +54,43 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
 function audioChunkMessage(base64Data: string): LiveRealtimeInputMessage {
   return {
     realtimeInput: {
-      mediaChunks: [{ mimeType: INPUT_MIME_TYPE, data: base64Data }],
+      // Актуальная форма realtime-входа (в API это поле называется audio;
+      // устаревший mediaChunks оставлен в референсе как DEPRECATED).
+      audio: {
+        mimeType: INPUT_MIME_TYPE,
+        data: base64Data,
+      },
     },
   };
 }
 
 function toErrorMessage(err: unknown, fallback: string): string {
   return err instanceof Error && err.message ? err.message : fallback;
+}
+
+/**
+ * Человеческий текст для закрытия сокета. Коды 1000 (наша команда `disconnect`)
+ * и 1005 (нет кода) считаются нормальным завершением — молча гасим сессию.
+ * 1008 — платформа отклонила рукопожатие (например, проверка JWT не отключена).
+ * 4408/4410 присылает наш прокси: «апстрим не поднялся» и «Google закрыл
+ * рабочую сессию».
+ */
+export function describeSocketClose(code: number, reason?: string | null): string | null {
+  if (code === 1000 || code === 1005) return null;
+
+  const detail = reason?.trim();
+  if (code === 1008) return "Голосовая сессия отклонена сервером (не авторизована).";
+  if (code === 4408) {
+    return detail
+      ? `Голосовая сессия не поднялась: ${detail}`
+      : "Голосовая сессия не поднялась: соединение с Gemini оборвалось.";
+  }
+  if (code === 4410) {
+    return detail
+      ? `Gemini закрыл голосовую сессию: ${detail}`
+      : "Gemini закрыл голосовую сессию. Переподключитесь, чтобы продолжить.";
+  }
+  return `Голосовая сессия закрыта (код ${code})${detail ? `: ${detail}` : ""}.`;
 }
 
 /**
@@ -91,6 +121,8 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}) {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [analyser, setAnalyser] = useState<AnalyserNode | null>(null);
   const [inputAnalyser, setInputAnalyser] = useState<AnalyserNode | null>(null);
+  /** Модель, на которой реально поднялась сессия (приходит в proxyInfo). */
+  const [liveModel, setLiveModel] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const engineRef = useRef<AudioPlaybackEngine | null>(null);
@@ -106,6 +138,8 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}) {
   const setupSentRef = useRef(false);
   const readyRef = useRef(false);
   const preRollRef = useRef<string[]>([]);
+  /** Причину уже показали (proxyError/upstreamError/sessionClosed) — onclose не дублирует её. */
+  const errorReportedRef = useRef(false);
   const vadRef = useRef<VoiceActivityTracker | null>(null);
   /** Когда модель последний раз что-то делала — чтобы VAD не «думал» после ответа. */
   const lastModelActivityRef = useRef(0);
@@ -191,6 +225,8 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}) {
     setAgentState("idle");
     setIsMuted(false);
     mutedRef.current = false;
+    errorReportedRef.current = false;
+    setLiveModel(null);
 
     try {
       // 1. Честный JWT пользователя: прокси валидирует его через
@@ -352,6 +388,11 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}) {
         // А) Прокси сообщил фактически открытую модель -> шлём setup
         if (message.proxyInfo) {
           clearFallbackTimer();
+          setLiveModel(message.proxyInfo.model);
+          // Прокси шлёт proxyInfo на каждую успешно открытую попытку: после
+          // ротации «модель × ключ» нужно отправить setup заново, иначе сессия
+          // останется без конфигурации.
+          setupSentRef.current = false;
           sendSetup(message.proxyInfo.model);
           return;
         }
@@ -375,6 +416,39 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}) {
         // В) Прокси не смог поднять апстрим (ключи/модели кончились)
         if (message.proxyError) {
           const text = message.proxyError;
+          errorReportedRef.current = true;
+          setErrorMessage(text);
+          setStatus("error");
+          setAgentState("idle");
+          callbacks.onError?.(text);
+          return;
+        }
+
+        // В2) Прокси увидел, что Google отверг setup (неверный ключ, недоступная
+        // модель, исчерпанная квота). Это не «нормальное» закрытие — показываем
+        // текст, чтобы причина была видна без консоли.
+        if (message.upstreamError) {
+          const detail = message.upstreamError.reason?.trim();
+          const text = detail
+            ? `Голосовая сессия не поднялась: ${detail}`
+            : "Голосовая сессия не поднялась: Google закрыл соединение.";
+          errorReportedRef.current = true;
+          setErrorMessage(text);
+          setStatus("error");
+          setAgentState("idle");
+          callbacks.onError?.(text);
+          return;
+        }
+
+        // В3) Google закрыл уже работавшую сессию (лимит времени или простой).
+        // Пока не подключены sessionResumption + contextWindowCompression,
+        // честнее сказать об этом прямо, чем показывать «Сессия закрыта».
+        if (message.sessionClosed) {
+          const reason = message.sessionClosed.reason?.trim();
+          const text = reason
+            ? `Gemini закрыл голосовую сессию: ${reason}`
+            : "Gemini закрыл голосовую сессию (лимит времени). Подключитесь заново, чтобы продолжить.";
+          errorReportedRef.current = true;
           setErrorMessage(text);
           setStatus("error");
           setAgentState("idle");
@@ -443,14 +517,21 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}) {
 
       ws.onerror = () => {
         const text = "Ошибка соединения с голосовым сервисом.";
+        errorReportedRef.current = true;
         setErrorMessage(text);
         setStatus("error");
         callbacks.onError?.(text);
       };
 
       ws.onclose = (event) => {
-        if (event.code !== 1000) {
-          const text = `Голосовая сессия закрыта (код ${event.code}).`;
+        // Причина уже показана фреймом прокси — не повторяем её тостом.
+        if (errorReportedRef.current) {
+          void cleanup(true).then(() => setStatus("error"));
+          return;
+        }
+
+        const text = describeSocketClose(event.code, event.reason);
+        if (text) {
           setErrorMessage(text);
           callbacks.onError?.(text);
           void cleanup(true).then(() => setStatus("error"));
@@ -494,6 +575,8 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}) {
     analyser,
     /** Анализатор микрофона — внешнее кольцо «ваш голос». */
     inputAnalyser,
+    /** Фактическая модель сессии: показываем в оверлее, чтобы деплой было видно глазами. */
+    liveModel,
     connect,
     disconnect,
     toggleMute,
