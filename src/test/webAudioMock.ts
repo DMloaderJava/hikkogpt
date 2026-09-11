@@ -121,6 +121,14 @@ export interface MockAudioContextOptions {
   rejectCustomSampleRate?: boolean;
 }
 
+export class MockAudioWorklet {
+  readonly modules: string[] = [];
+
+  async addModule(url: string): Promise<void> {
+    this.modules.push(url);
+  }
+}
+
 export class MockAudioContext {
   static instances: MockAudioContext[] = [];
   static defaultSampleRate = 48000;
@@ -129,6 +137,10 @@ export class MockAudioContext {
   state: AudioContextState = "suspended";
   currentTime = 0;
   destination = new MockAudioNode();
+
+  /** Захват микрофона в голосовом режиме подключает ворклет через addModule. */
+  readonly audioWorklet = new MockAudioWorklet();
+  readonly mediaStreamSources: MockAudioNode[] = [];
 
   readonly createdSources: MockAudioBufferSourceNode[] = [];
   readonly createdGains: MockGainNode[] = [];
@@ -162,6 +174,12 @@ export class MockAudioContext {
   createBufferSource(): MockAudioBufferSourceNode {
     const node = new MockAudioBufferSourceNode();
     this.createdSources.push(node);
+    return node;
+  }
+
+  createMediaStreamSource(_stream?: unknown): MockAudioNode {
+    const node = new MockAudioNode();
+    this.mediaStreamSources.push(node);
     return node;
   }
 

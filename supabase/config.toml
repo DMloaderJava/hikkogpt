@@ -17,3 +17,9 @@ verify_jwt = false
 
 [functions.dialog-tts]
 verify_jwt = false
+
+# Браузерный WebSocket не может выставить заголовок Authorization, поэтому
+# платформенная проверка JWT здесь выключена: функция сама валидирует токен
+# пользователя из query-параметра через supabase.auth.getUser(token).
+[functions.gemini-live]
+verify_jwt = false

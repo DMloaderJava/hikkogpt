@@ -2,11 +2,15 @@
 
 Аудит от 2026-09-11, ветка `arena/01a090f2-hikkogpt` (база — `d3752a3`, PR #1 «Voice Mode»).
 
+> **Статус на конец дня 2026-09-11: Этап 1 закрыт.** Исправлены P0-1 (деплой-флаг), P0-2 (мёртвые модели),
+> P1-3 (`mediaChunks` → `audio`) и P1-5 (слепая ротация ключей + непонятные ошибки); в оверлее появился бейдж фактической модели сессии. Подробности — в разделе 9
+> (пункты помечены «ИСПРАВЛЕНО»). Этапы 2–4 (session resumption, транскрипция, `audioStreamEnd`) — не начаты.
+
 Проверено в этом репозитории:
 
 | Проверка | Результат |
 | --- | --- |
-| `npx vitest run` | **86/86 зелёных** (6 файлов) |
+| `npx vitest run` | **110/110 зелёных** (8 файлов); было 86 — добавились `geminiLive.test.ts` и `voiceModeConfig.test.ts` |
 | `npx tsc -p tsconfig.app.json --noEmit` | чисто |
 | `npx vite build` | успешно, один чанк 845 кБ (gzip 258 кБ) |
 | `npx eslint .` | 17 ошибок в репозитории, **ни одна — в файлах голосового режима** (это `any` в `chat`/`deepsearch`/`ui/*`, `useSounds.ts`, `Index.tsx`) |
@@ -20,10 +24,10 @@
 
 Но **«как задеплоить» и «на какой модели» — сейчас не сходится с реальностью 2026 года**:
 
-1. **P0. Деплой `gemini-live` без флага не поднимется.** В `supabase/config.toml` нет секции `[functions.gemini-live]`, а Supabase по умолчанию (`verify_jwt = true`) требует JWT в заголовке `Authorization`. Браузерный WebSocket заголовки задать не может — значит, платформа отклонит апгрейд до того, как код функции вообще выполнится. В комментарии к PR и в roadmap написано просто `supabase functions deploy gemini-live` — этого мало.
-2. **P0. Все три модели в списке прокси сняты Google с эксплуатации.** По changelog Gemini API `gemini-2.0-flash-live-001` и `gemini-live-2.5-flash-preview` отключены 09.12.2025, `gemini-2.0-flash-exp` — из той же отменённой линейки. Даже с ключом и правильным `verify_jwt` сессия не поднимется, пока `GEMINI_LIVE_MODEL` не переопределён вручную на актуальную модель.
-3. **P1.** Протокол использует устаревшее поле `realtimeInput.mediaChunks` вместо `audio`; нет `sessionResumption`/`contextWindowCompression`, поэтому диалог упрётся в лимит сессии (~15 минут аудио, ~10 минут на соединение) и оборвётся без объяснений.
-4. **P1.** Ротация ключей/моделей в прокси работает только если апстрим **не** открылся. А типичные ошибки Google (неверный ключ, недоступная модель) приходят **после** успешного апгрейда — то есть ротация не сработает, а клиент увидит аккуратный `close(1000)`, то есть «сессия закрыта», а не ошибку.
+1. ~~**P0. Деплой `gemini-live` без флага не поднимется.**~~ **ИСПРАВЛЕНО:** секция добавлена в `config.toml`. В `supabase/config.toml` нет секции `[functions.gemini-live]`, а Supabase по умолчанию (`verify_jwt = true`) требует JWT в заголовке `Authorization`. Браузерный WebSocket заголовки задать не может — значит, платформа отклонит апгрейд до того, как код функции вообще выполнится. В комментарии к PR и в roadmap написано просто `supabase functions deploy gemini-live` — этого мало.
+2. ~~**P0. Все три модели в списке прокси сняты Google с эксплуатации.**~~ **ИСПРАВЛЕНО:** дефолт `models/gemini-3.1-flash-live-preview` + актуальный фолбэк. По changelog Gemini API `gemini-2.0-flash-live-001` и `gemini-live-2.5-flash-preview` отключены 09.12.2025, `gemini-2.0-flash-exp` — из той же отменённой линейки. Даже с ключом и правильным `verify_jwt` сессия не поднимется, пока `GEMINI_LIVE_MODEL` не переопределён вручную на актуальную модель.
+3. **P1 (частично исправлено).** ~~Устаревшее поле `realtimeInput.mediaChunks`~~ → заменено на `audio`. Управления сессией по-прежнему нет: без `sessionResumption`/`contextWindowCompression` диалог упрётся в лимит (~15 минут аудио, ~10 минут на соединение) — но теперь об этом честно сообщается, а не просто «Сессия закрыта».
+4. ~~**P1.** Ротация ключей/моделей в прокси работает только если апстрим **не** открылся.~~ **ИСПРАВЛЕНО:** сессия считается поднятой только после `setupComplete`, добавлен watchdog на 6 с, причины отдаются клиенту. А типичные ошибки Google (неверный ключ, недоступная модель) приходят **после** успешного апгрейда — то есть ротация не сработает, а клиент увидит аккуратный `close(1000)`, то есть «сессия закрыта», а не ошибку.
 
 Ниже — полная карта, все находки с приоритетами и конкретные патчи.
 
@@ -91,26 +95,26 @@
 
 | Файл | Строк | Роль |
 | --- | --- | --- |
-| `src/hooks/useGeminiLive.ts` | 501 | Дирижёр: сокет, setup, пре-ролл, barge-in, toolCall → саундборд, mute, состояния |
+| `src/hooks/useGeminiLive.ts` | 573 | Дирижёр: сокет, setup, пре-ролл, barge-in, toolCall → саундборд, mute, состояния; разбор `upstreamError`/`sessionClosed` и `describeSocketClose` |
 | `src/lib/audioEngine.ts` | 272 | Очередь PCM 24 кГц, base64→Float32, barge-in, общая шина, `createSoundboard()` |
 | `src/lib/soundboard.ts` | 211 | Предзагрузка 4 mp3 в `AudioBuffer`, мгновенный `play()`, `stopAll()`, метки для UI |
 | `src/lib/audioVisualization.ts` | 152 | Чистая математика сферы: тон из CSS, RMS/спектр, сглаживание, reduced-motion |
 | `src/lib/orbRenderer.ts` | 125 | Кадр сферы (64 столбика, ядро, кольцо микрофона, дуги «думаю») |
 | `src/lib/voiceActivity.ts` | 88 | Локальный VAD: RMS, порог 0.02, onset 2 кадра, пауза 550 мс |
 | `src/lib/speechEvents.ts` | 19 | Событие «стоп озвучке сообщений» + `speechSynthesis.cancel()` |
-| `src/types/gemini-live.ts` | 159 | Типы, `PLAY_SOUND_TOOL`, `VOICE_SYSTEM_INSTRUCTION`, список голосов, `DEFAULT_LIVE_MODEL` |
+| `src/types/gemini-live.ts` | 196 | Типы, `PLAY_SOUND_TOOL`, `VOICE_SYSTEM_INSTRUCTION`, список голосов, `DEFAULT_LIVE_MODEL` + `DEFAULT_LIVE_MODEL_FALLBACKS` |
 | `public/pcm-recorder-worklet.js` | 112 | Захват микрофона: ресемплинг с антиалиасингом, кадры 32 мс, `flush` |
 | `src/components/VoiceModeOverlay.tsx` | 153 | Оверлей: статус, mute, «Повторить», Esc, вспышка названия эффекта |
 | `src/components/VoiceVisualizer.tsx` | 183 | Canvas + RAF: анализатор движка (внутри) и микрофона (кольцо) |
 | `src/components/dev/VoiceVisualizerDemo.tsx` | 194 | Дев-стенд сферы по хэшу `#voice-preview` (только DEV) |
-| `supabase/functions/gemini-live/index.ts` | 115 | WS-прокси: auth по JWT, ротация ключ/модель, `proxyInfo`, `proxyError` |
+| `supabase/functions/gemini-live/index.ts` | 228 | WS-прокси: auth по JWT, ротация ключ/модель со watchdog, `proxyInfo`, `upstreamError`, `sessionClosed` |
 | `src/components/ChatInput.tsx` | — | Кнопка `AudioLines` (:164-183) + индикатор активной сессии |
 | `src/pages/Index.tsx` | — | Связка хука с чатом (:41-56, оверлей :353-368), состояние `lastSound` |
 | `src/components/SettingsPanel.tsx` | — | Селектор «Голос озвучки» (6 голосов, включая Leda) |
 
 Смежное (не ядро): `useVoice.ts` (диктовка), `MessageBubble.tsx` (`useTTS`), `DialogTtsModal.tsx` + `AudioPlayer.tsx`, `gemini-tts`, `elevenlabs-stt`, `dialog-tts`, `useSounds.ts`.
 
-Суммарно ядро ≈ 2 100 строк кода + ≈ 1 280 строк тестов.
+Суммарно ядро ≈ 2 250 строк кода + ≈ 1 600 строк тестов.
 
 ---
 
@@ -145,7 +149,7 @@
 } }
 ```
 
-**Микрофон (32 мс):** `{ "realtimeInput": { "mediaChunks": [{ "mimeType": "audio/pcm;rate=16000", "data": "<base64>" }] } }`
+**Микрофон (32 мс):** `{ "realtimeInput": { "audio": { "mimeType": "audio/pcm;rate=16000", "data": "<base64>" } } }`
 
 **Ответ на toolCall:** `{ "toolResponse": { "functionResponses": [{ "id": "...", "name": "play_sound", "response": { "output": { "success": true, "sound_name": "…" } } }] } }`
 
@@ -181,11 +185,13 @@ agentState: idle ─► listening ─(VAD speech-end, не играет движ
 | `pcmRecorderWorklet.test.ts` | 16 | Песочница `AudioWorkletProcessor`: 16 кГц на 44.1/48/96 кГц, отсутствие дрейфа фазы на 10 с, кадры ровно по 512, `flush`, антиалиасинг, Int16-клиппинг |
 | `audioEngine.test.ts` | 18 | base64→Float32 LE, укладка встык, догон при отставании, пробуждение контекста, barge-in с фейдом, освобождение нод, `setVolume`, общая шина с саундбордом, закрытие своего/чужого контекста |
 | `soundboard.test.ts` | 15 | Предзагрузка и идемпотентность, докачка упавшего файла, Safari-`decodeAudioData`, мгновенный старт, стоп по barge-in, `dispose` |
-| `voiceUi.test.ts` | 24 | Тон/цвет, уровни, сглаживание, VAD (щелчки, паузы, сброс), выбор голоса Live, подписи звуков |
+| `voiceUi.test.ts` | 26 | Тон/цвет, уровни, сглаживание, VAD (щелчки, паузы, сброс), выбор голоса Live, подпись и «устаревание» модели в оверлее, подписи звуков |
 | `voiceVisualizer.test.tsx` | 12 | RAF-цикл, размеры буферов, отсутствие 2D-контекста, микрофонное кольцо, «думаю», вписывание в холст, доступность |
-| **Итого** | **86** | |
+| `geminiLive.test.ts` | 14 | Хук с фейковым WebSocket и стеком Web Audio: setup по `proxyInfo`, пре-ролл до `setupComplete`, поле `audio`, mute, ответы на toolCall, разбор `upstreamError`/`sessionClosed`, пересылка setup после ротации на прокси, отсутствие дублирующих ошибок, `describeSocketClose` |
+| `voiceModeConfig.test.ts` | 8 | Стражи блокеров: `verify_jwt = false`, апгрейд даёт 426, модели не откатываются на снятые, сессия поднимается только по `setupComplete`, в кадре нет `mediaChunks` |
+| **Итого** | **110** | |
 
-**Не покрыто:** `useGeminiLive` как таковой (переходы статусов, пре-ролл, ответ на toolCall, mute), edge-функция `gemini-live` (ротация, `proxyInfo`, auth), `VoiceModeOverlay` (Esc, кнопки), `useVoice` (диктовка). Самый ценный недостающий тест — хук с фейковым `WebSocket` + таймерами: он ловит ровно те ошибки, что перечислены в разделе 9.
+**Не покрыто после Этапа 1:** edge-функция `gemini-live` (ротация, watchdog, auth) — проверяется только тестами конфигурации и `describeSocketClose` на клиенте; `VoiceModeOverlay` (Esc, кнопки); `useVoice` (диктовка). Ротация и watchdog пока проверяются чтением кода и ревью — их стоит покрыть Deno-тестами, когда появится отдельный CI для функций.
 
 ---
 
@@ -205,11 +211,11 @@ agentState: idle ─► listening ─(VAD speech-end, не играет движ
 
 ### P0 — блокеры живой проверки
 
-#### P0-1. `gemini-live` не пройдёт платформенную проверку JWT
+#### P0-1. `gemini-live` не пройдёт платформенную проверку JWT — ИСПРАВЛЕНО
 
 `supabase/config.toml` содержит `verify_jwt = false` для `chat`, `deepsearch`, `elevenlabs-stt`, `gemini-tts`, `image-search`, `dialog-tts` — и **не содержит записи для `gemini-live`**. По умолчанию Supabase требует валидный JWT в заголовке `Authorization`, а браузерный WebSocket заголовки выставлять не умеет; официальный гайд Supabase «Handling WebSockets» прямо говорит: «You can skip the default authorization header checks by explicitly providing `--no-verify-jwt`». Итог: платформа отклонит handshake до запуска кода, `useGeminiLive` покажет «Ошибка соединения» / «Сессия не поднялась», и это будет выглядеть как проблема Google, хотя дело в деплое.
 
-**Фикс:**
+**Фикс (применён):**
 
 ```toml
 # supabase/config.toml
@@ -219,7 +225,7 @@ verify_jwt = false
 
 и обычный `supabase functions deploy gemini-live` (config.toml подхватится) либо разово `--no-verify-jwt`. Проверка после деплоя: `curl -i https://<project>.supabase.co/functions/v1/gemini-live` должен вернуть **426** `Expected WebSocket upgrade` (значит, функция достижима и вопрос только в upgrade), а не 401.
 
-#### P0-2. Все модели в списке прокси сняты с эксплуатации
+#### P0-2. Все модели в списке прокси сняты с эксплуатации — ИСПРАВЛЕНО
 
 ```ts
 // supabase/functions/gemini-live/index.ts:6-10
@@ -239,7 +245,7 @@ const MODELS = [
 | `models/gemini-3.1-flash-live-preview` | Рекомендуемая для новых голосовых сценариев: низкая задержка, `thinkingLevel` вместо `thinkingBudget`, 128k контекст; **синхронный** function calling — наш `play_sound` подходит |
 | `models/gemini-2.5-flash-native-audio-preview-12-2025` | Если нужны proactive audio / affective dialog / асинхронные tool calls; но у сообщества есть открытые баги с преждевременным `turnComplete` |
 
-**Фикс:** дефолт — 3.1-live, 2.5 native audio — вторым номером; `GEMINI_API_KEYS`-независимое переопределение через `GEMINI_LIVE_MODEL` оставить; `DEFAULT_LIVE_MODEL` в типах синхронизировать со первым элементом списка.
+**Фикс (применён):** дефолт — 3.1-live, 2.5 native audio — вторым номером; `GEMINI_API_KEYS`-независимое переопределение через `GEMINI_LIVE_MODEL` оставить; `DEFAULT_LIVE_MODEL` в типах синхронизировать со первым элементом списка.
 
 ```ts
 const MODELS = [
@@ -252,17 +258,19 @@ const MODELS = [
 
 ### P1 — сломается в реальной эксплуатации
 
-#### P1-3. `mediaChunks` — deprecated, надо `audio`
+#### P1-3. `mediaChunks` — deprecated, надо `audio` — ИСПРАВЛЕНО
 
-Референс Live API помечает `media_chunks` как `DEPRECATED: Use one of audio, video, or text instead` и предупреждает, что несколько `mediaChunks` в одном сообщении не поддерживаются (у нас один — поэтому работает). Правильная форма:
+Референс Live API помечает `media_chunks` как `DEPRECATED: Use one of audio, video, or text instead` и предупреждает, что несколько `mediaChunks` в одном сообщении не поддерживаются (у нас один — поэтому работало).
+
+**Фикс (применён):**
 
 ```ts
-function audioChunkMessage(data: string): Unknown {
-  return { realtimeInput: { audio: { mimeType: "audio/pcm;rate=16000", data } } };
+function audioChunkMessage(data: string): LiveRealtimeInputMessage {
+  return { realtimeInput: { audio: { mimeType: INPUT_MIME_TYPE, data } } };
 }
 ```
 
-Одно поле, один и тот же формат — правка на 3 строки и пару тестов.
+Заодно в `useGeminiLive.ts` появился экспорт `describeSocketClose(code, reason)` — единая точка правды о том, какие коды закрытия считать нормальными; на неё же опираются тесты.
 
 #### P1-4. Нет управления сессией: она оборвётся сама
 
@@ -288,7 +296,7 @@ setup: {
 
 Заодно это закрывает пункт roadmap «Автопауза при уходе вкладки в фон»: на `visibilitychange` логично слать `audioStreamEnd` и ставить микрофон на паузу, а при возврате — продолжать.
 
-#### P1-5. Ротация ключей/моделей в прокси не срабатывает в типичном случае
+#### P1-5. Ротация ключей/моделей в прокси не срабатывает в типичном случае — ИСПРАВЛЕНО
 
 ```ts
 ws.onopen = () => { openedOnce = true; … }      // :66
@@ -301,7 +309,9 @@ ws.onclose = (ev) => {
 
 Google почти всегда сначала принимает WS-апгрейд, а ошибку (неверный ключ, модель недоступна для ключа/региона, квота) присылает уже внутри или закрывает соединение **после** `onopen`. Тогда `openedOnce === true`, перебора следующей пары «модель × ключ» не будет, а клиент получит `close(1000)` — то есть `useGeminiLive` обработает это как **нормальное** завершение: `cleanup()` без ошибки, статус `disconnected`, никакого тоста. Диагностировать невозможно.
 
-**Фикс:** считать сессию поднятой только после `setupComplete`, а не после `onopen`; ошибку апстрима (код ≠ 1000, `ev.reason`, ошибка в первом кадре) транслировать клиенту как `proxyError`, чтобы оверлей показал текст. Плюс таймаут на попытку (например, 4–5 с без `setupComplete` → следующая пара).
+**Фикс (применён):** сессия считается поднятой только после `setupComplete`; добавлен watchdog `SETUP_TIMEOUT_MS = 6000`, который закрывает «молчащую» попытку и запускает следующую пару; причины отдаются клиенту фреймами `upstreamError` (все пары исчерпаны) и `sessionClosed` (Google закрыл рабочую сессию), а прокси закрывает сокет кодами 4408/4410. Клиент показывает причину и не дублирует тост, когда причина уже пришла фреймом.
+
+Два подводных камня, найденных при реализации (закрыты там же): сокет, закрытый watchdog'ом, не должен запускать **вторую** ротацию — поэтому все обработчики апстрима начинаются с проверки `ws !== upstream`; а клиент обязан переслать `setup` на новый `proxyInfo`, иначе после ротации сессия осталась бы без конфигурации (`setupSentRef` сбрасывается в ветке `proxyInfo`). Оба случая покрыты тестами.
 
 #### P1-6. Диалог не связан с чатом и не показывает транскрипцию
 
@@ -348,9 +358,11 @@ Google почти всегда сначала принимает WS-апгрей
 
 ## 10. План работ
 
-**Шаг 1 (деплой, 15 минут).** `[functions.gemini-live] verify_jwt = false` → `supabase functions deploy gemini-live` → `supabase secrets set GEMINI_API_KEYS=… GEMINI_LIVE_MODEL=models/gemini-3.1-flash-live-preview` → `curl` на 426 → живой прогон.
+**Шаг 1 (деплой, 15 минут) — СДЕЛАНО в коде.** `[functions.gemini-live] verify_jwt = false` добавлен в `config.toml`; дефолтная модель обновлена; тесты-стражи не дадут откатить.
+Осталось выполнить на проекте: `supabase functions deploy gemini-live` → при желании `supabase secrets set GEMINI_LIVE_MODEL=models/…` → `curl -i` (ждём 426) → живой прогон.
 
-**Шаг 2 (совместимость с текущим API, ~полдня).** Заменить список моделей и `DEFAULT_LIVE_MODEL`; `mediaChunks` → `audio`; добавить `inputAudioTranscription`/`outputAudioTranscription` в setup и вывести текст под сферой (закрывает roadmap-пункт 1); `audioStreamEnd` при mute/фоне/закрытии.
+**Шаг 2 (совместимость с текущим API) — СДЕЛАНО частично.** Модели обновлены, `mediaChunks` → `audio`, причины ошибок доезжают до UI.
+Осталось: `inputAudioTranscription`/`outputAudioTranscription` + вывод текста под сферой (roadmap-пункт 1) и `audioStreamEnd` при mute/фоне/закрытии.
 
 **Шаг 3 (долгие сессии, ~день).** `sessionResumption` + `contextWindowCompression`; обработка `goAway`/`sessionResumptionUpdate`; корректная трансляция ошибок апстрима в `proxyError`; ротация с условием «`setupComplete` не пришёл за N секунд».
 
@@ -363,15 +375,17 @@ Google почти всегда сначала принимает WS-апгрей
 ## 11. Чек-лист живой проверки (когда есть ключи)
 
 1. `GEMINI_API_KEYS` — ключ(и) AI Studio с доступом к Live API; `GEMINI_LIVE_MODEL` — при желании переопределить дефолт.
-2. `curl -i .../functions/v1/gemini-live` → **426**, не 401.
-3. Войти в аккаунт (без JWT режим сознательно не работает), нажать `AudioLines` → звёздочка в кнопке, оверлей, сфера синяя.
-4. «Слушаю…» → говорите: сфера реагирует на вас кольцом, после паузы — «Думаю…», затем «Говорю…».
-5. Перебивание: начать говорить во время ответа — речь должна оборваться в течение ~20 мс, без щелчка.
-6. Саундборд: спровоцировать шутку/фактическую ошибку → вспышка названия эффекта в оверлее + звук поверх речи; на перебивании хохот тоже должен замолкать.
-7. Mute → микрофон не идёт на сервер; речь модели слышна.
-8. Долгий сеанс (>10 минут) — сейчас ожидаемо оборвётся; после шага 3 должен продолжиться.
-9. Safari/iOS: проверить, что звук вообще стартует после клика (см. P2-9).
-10. Наушники — иначе риск само-перебивания (P1-8).
+2. Задеплоить функцию и убедиться, что `[functions.gemini-live] verify_jwt = false` уехало вместе с кодом (иначе платформа отклонит рукопожатие до входа в функцию).
+3. `curl -i .../functions/v1/gemini-live` → **426**, не 401.
+4. Войти в аккаунт (без JWT режим сознательно не работает), нажать `AudioLines` → звёздочка в кнопке, оверлей, сфера синяя.
+5. «Слушаю…» → говорите: сфера реагирует на вас кольцом, после паузы — «Думаю…», затем «Говорю…».
+6. Перебивание: начать говорить во время ответа — речь должна оборваться в течение ~20 мс, без щелчка.
+7. Саундборд: спровоцировать шутку/фактическую ошибку → вспышка названия эффекта в оверлее + звук поверх речи; на перебивании хохот тоже должен замолкать.
+8. Mute → микрофон не идёт на сервер; речь модели слышна.
+9. Негативный сценарий: подставить заведомо неверный `GEMINI_API_KEYS` → оверлей должен показать причину («Голосовая сессия не поднялась: …»), а не «Сессия закрыта».
+10. Долгий сеанс (>10 минут) — сейчас ожидаемо оборвётся с честным сообщением; после Этапа 3 должен продолжиться.
+11. Safari/iOS: проверить, что звук вообще стартует после клика (см. P2-9).
+12. Наушники — иначе риск само-перебивания (P1-8).
 
 ---
 

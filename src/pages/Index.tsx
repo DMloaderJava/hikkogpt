@@ -360,6 +360,7 @@ const Index = () => {
           errorMessage={live.errorMessage}
           lastSound={lastSound}
           voiceName={resolveLiveVoiceName(ttsVoice)}
+          liveModel={live.liveModel}
           onToggleMute={live.toggleMute}
           onReconnect={handleToggleVoiceMode}
           onClose={live.disconnect}

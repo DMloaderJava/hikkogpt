@@ -11,7 +11,12 @@ import {
 } from "@/lib/audioVisualization";
 import { VoiceActivityTracker, frameRms } from "@/lib/voiceActivity";
 import { SOUND_EFFECTS, SOUND_LABELS } from "@/lib/soundboard";
-import { LIVE_VOICE_NAMES, resolveLiveVoiceName } from "@/types/gemini-live";
+import {
+  LIVE_VOICE_NAMES,
+  isLegacyLiveModel,
+  resolveLiveVoiceName,
+  shortLiveModelName,
+} from "@/types/gemini-live";
 
 describe("audioVisualization: тон и цвет", () => {
   it("достаёт тон из значения CSS-переменной вида '210 100% 52%'", () => {
@@ -250,6 +255,24 @@ describe("выбор голоса для Live API", () => {
     expect(resolveLiveVoiceName(null)).toBe("Aoede");
     expect(resolveLiveVoiceName(undefined)).toBe("Aoede");
     expect(resolveLiveVoiceName("")).toBe("Aoede");
+  });
+});
+
+describe("модель Live-сессии в UI", () => {
+  it("сокращает имя модели для бейджа", () => {
+    expect(shortLiveModelName("models/gemini-3.1-flash-live-preview")).toBe("gemini-3.1-flash-live");
+    expect(shortLiveModelName("models/gemini-2.5-flash-native-audio-preview-12-2025")).toBe(
+      "gemini-2.5-flash-native-audio-preview-12-2025"
+    );
+    expect(shortLiveModelName(null)).toBe("");
+  });
+
+  it("подсвечивает модели, снятые Google с эксплуатации", () => {
+    expect(isLegacyLiveModel("models/gemini-2.0-flash-live-001")).toBe(true);
+    expect(isLegacyLiveModel("models/gemini-live-2.5-flash-preview")).toBe(true);
+    expect(isLegacyLiveModel("models/gemini-3.1-flash-live-preview")).toBe(false);
+    expect(isLegacyLiveModel("models/gemini-2.5-flash-native-audio-preview-12-2025")).toBe(false);
+    expect(isLegacyLiveModel(null)).toBe(false);
   });
 });
 

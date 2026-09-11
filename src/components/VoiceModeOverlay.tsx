@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { AlertTriangle, AudioLines, Loader2, Mic, MicOff, PhoneOff, RotateCcw } from "lucide-react";
 import { VoiceVisualizer } from "@/components/VoiceVisualizer";
 import { SOUND_LABELS } from "@/lib/soundboard";
+import { isLegacyLiveModel, shortLiveModelName } from "@/types/gemini-live";
 import type {
   ConnectionStatus,
   PrebuiltVoiceName,
@@ -19,6 +20,8 @@ export interface VoiceModeOverlayProps {
   /** Последний эффект, который попросила модель — короткая вспышка в UI. */
   lastSound?: SoundEffectType | null;
   voiceName: PrebuiltVoiceName;
+  /** Модель, на которой реально поднялась сессия (из `proxyInfo`). */
+  liveModel?: string | null;
   onToggleMute: () => void;
   onReconnect: () => void;
   onClose: () => void;
@@ -49,6 +52,7 @@ export function VoiceModeOverlay({
   errorMessage,
   lastSound = null,
   voiceName,
+  liveModel = null,
   onToggleMute,
   onReconnect,
   onClose,
@@ -74,6 +78,22 @@ export function VoiceModeOverlay({
           <span className="rounded-md bg-secondary px-1.5 py-0.5 text-[10px] normal-case tracking-normal">
             {voiceName}
           </span>
+          {liveModel && (
+            <span
+              className={`rounded-md px-1.5 py-0.5 text-[10px] normal-case tracking-normal ${
+                isLegacyLiveModel(liveModel)
+                  ? "bg-destructive/15 text-destructive"
+                  : "bg-secondary/60 text-muted-foreground"
+              }`}
+              title={
+                isLegacyLiveModel(liveModel)
+                  ? `${liveModel} — модель снята с эксплуатации, обновите GEMINI_LIVE_MODEL`
+                  : liveModel
+              }
+            >
+              {shortLiveModelName(liveModel)}
+            </span>
+          )}
         </div>
 
         <VoiceVisualizer

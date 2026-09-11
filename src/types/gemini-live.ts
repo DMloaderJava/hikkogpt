@@ -36,6 +36,41 @@ export interface FunctionDeclaration {
   parameters: Record<string, unknown>;
 }
 
+/**
+ * Модель для `setup`. Держите в согласии с первым элементом `MODELS`
+ * в supabase/functions/gemini-live/index.ts и не забывайте про префикс `models/`.
+ *
+ * История: прошлый дефолт `models/gemini-2.0-flash-live-001` Google отключил
+ * 09.12.2025 — вместе с `models/gemini-live-2.5-flash-preview`. Актуальны
+ * `gemini-3.1-flash-live-preview` (рекомендуемая для новых голосовых сценариев)
+ * и `gemini-2.5-flash-native-audio-preview-12-2025` (proactive audio / affective dialog).
+ */
+export const DEFAULT_LIVE_MODEL = "models/gemini-3.1-flash-live-preview";
+
+/**
+ * Список моделей для ротации в прокси: `GEMINI_LIVE_MODEL` (если задан) идёт
+ * первым, дальше — актуальный фолбэк, потом устаревшие имена. Устаревшие нужны,
+ * чтобы проект пережил период до переопределения секрета и не ломался на
+ * кастомных прокси.
+ */
+export const DEFAULT_LIVE_MODEL_FALLBACKS = [
+  "models/gemini-2.5-flash-native-audio-preview-12-2025",
+  "models/gemini-2.0-flash-live-001",
+  "models/gemini-live-2.5-flash-preview",
+];
+
+/** Модель, на которой Google отвечает «не поддерживается / устарела». */
+export function isLegacyLiveModel(model: string | null | undefined): boolean {
+  if (!model) return false;
+  return /gemini-(2\.0|1\.5)-|gemini-live-2\.5-flash-preview/.test(model);
+}
+
+/** Короткая подпись модели для UI: `models/gemini-3.1-flash-live-preview` → `gemini-3.1-flash-live`. */
+export function shortLiveModelName(model: string | null | undefined): string {
+  if (!model) return "";
+  return model.replace(/^models\//, "").replace(/-preview$/, "");
+}
+
 export interface BidiLiveConfig {
   setup: {
     model: string;
@@ -77,6 +112,16 @@ export interface LiveServerMessage {
   proxyError?: string;
   /** Прокси сообщает, на какой модели реально поднялась сессия (см. gemini-live). */
   proxyInfo?: LiveProxyInfo;
+  /**
+   * Все пары «модель × ключ» перебраны, setup так и не подтвердился.
+   * `reason` — текст причины (неверный ключ, недоступная модель, квота).
+   */
+  upstreamError?: { code: number; reason?: string };
+  /**
+   * Google закрыл уже работавшую сессию (лимит времени без session resumption).
+   * Прокси шлёт этот фрейм перед закрытием сокета, чтобы клиент показал причину.
+   */
+  sessionClosed?: { reason?: string };
   serverContent?: {
     interrupted?: boolean;
     turnComplete?: boolean;
@@ -95,13 +140,19 @@ export interface LiveSetupMessage {
   setup: BidiLiveConfig["setup"];
 }
 
+/**
+ * Поле `audio` — актуальная форма realtime-входа. Устаревший `mediaChunks`
+ * (и `media_chunks` в proto) помечен в референсе Live API как DEPRECATED:
+ * «Use one of audio, video, or text instead», и в одном сообщении поддерживается
+ * только первый чанк.
+ */
 export interface LiveRealtimeInputMessage {
   realtimeInput: {
-    mediaChunks: Array<{
+    audio: {
       mimeType: "audio/pcm;rate=16000";
       /** Base64 от Int16 PCM little-endian. */
       data: string;
-    }>;
+    };
   };
 }
 
@@ -114,13 +165,6 @@ export interface LiveToolResponse {
     }>;
   };
 }
-
-/**
- * Модель для `setup`, если прокси по какой-то причине не прислал `proxyInfo`
- * (например, ещё не задеплоен патч). Держите в согласии с первым элементом
- * MODELS в supabase/functions/gemini-live/index.ts.
- */
-export const DEFAULT_LIVE_MODEL = "models/gemini-2.0-flash-live-001";
 
 export const PLAY_SOUND_TOOL: FunctionDeclaration = {
   name: "play_sound",
