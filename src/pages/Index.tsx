@@ -345,6 +345,7 @@ const Index = () => {
             onDeepSearch={handleDeepSearch}
             voiceModeStatus={live.status}
             onToggleVoiceMode={handleToggleVoiceMode}
+            userEmail={user?.email}
           />
         </div>
       </div>
