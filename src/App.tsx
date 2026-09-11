@@ -9,6 +9,7 @@ import Index from "./pages/Index";
 import Auth from "./pages/Auth";
 import NotFound from "./pages/NotFound";
 import Landing from "./pages/Landing";
+import CameraOcr from "./pages/CameraOcr";
 
 const queryClient = new QueryClient();
 
@@ -39,6 +40,7 @@ function AppRoutes() {
     <Routes>
       <Route path="/" element={user ? <Index /> : <Landing />} />
       <Route path="/auth" element={user ? <Navigate to="/" replace /> : <Auth />} />
+      <Route path="/camera" element={<CameraOcr />} />
       <Route path="*" element={<NotFound />} />
     </Routes>
   );
