@@ -16,13 +16,20 @@ function AppRoutes() {
   const { user, loading } = useAuth();
   const [DevPreview, setDevPreview] = useState<ComponentType | null>(null);
 
-  // Дев-стенд сферы по хэшу #voice-preview (см. components/dev). В production
-  // ветка вырезается целиком вместе с динамическим импортом.
+  // Дев-стенды по хэшу: #voice-preview — сфера, #input-preview — строка ввода
+  // (см. components/dev). В production ветка вырезается целиком вместе с
+  // динамическими импортами.
   useEffect(() => {
-    if (!import.meta.env.DEV || window.location.hash !== "#voice-preview") return;
-    void import("@/components/dev/VoiceVisualizerDemo").then((mod) =>
-      setDevPreview(() => mod.VoiceVisualizerDemo)
-    );
+    if (!import.meta.env.DEV) return;
+    if (window.location.hash === "#voice-preview") {
+      void import("@/components/dev/VoiceVisualizerDemo").then((mod) =>
+        setDevPreview(() => mod.VoiceVisualizerDemo)
+      );
+    } else if (window.location.hash === "#input-preview") {
+      void import("@/components/dev/ChatInputDemo").then((mod) =>
+        setDevPreview(() => mod.ChatInputDemo)
+      );
+    }
   }, []);
 
   if (DevPreview) return <DevPreview />;

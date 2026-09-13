@@ -104,20 +104,28 @@ describe("ChatInput: вложения", () => {
     }
   });
 
-  it("у лимита дизейблит кнопки камеры и вложений", () => {
+  it("у лимита дизейблит камеру в строке и пункт вложений в меню «+»", () => {
     render(<ChatInput {...baseProps} />);
     expect(screen.getByLabelText("Сделать фото")).toBeEnabled();
-    expect(screen.getByLabelText("Прикрепить изображения")).toBeEnabled();
+
+    fireEvent.click(screen.getByTestId("plus-menu-trigger"));
+    expect(screen.getByTestId("plus-menu-item-attach")).toBeEnabled();
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
 
     setInputFiles(
       screen.getByTestId("chat-file-input"),
       [pngFile("1.png"), pngFile("2.png"), pngFile("3.png"), pngFile("4.png"), pngFile("5.png")]
     );
 
-    // Обе кнопки (камера + вложения) показывают лимит и задизейблены
-    const limitBtns = screen.getAllByLabelText("Достигнут лимит: максимум 5 фото");
-    expect(limitBtns).toHaveLength(2);
-    for (const btn of limitBtns) expect(btn).toBeDisabled();
+    // Камера в строке ввода показывает лимит и задизейблена
+    const cameraBtn = screen.getByLabelText("Достигнут лимит: максимум 5 фото");
+    expect(cameraBtn).toBeDisabled();
+
+    // Пункт «Прикрепить изображения» уехал под «+» и тоже задизейблен
+    fireEvent.click(screen.getByTestId("plus-menu-trigger"));
+    const attachItem = screen.getByTestId("plus-menu-item-attach");
+    expect(attachItem).toBeDisabled();
+    expect(attachItem).toHaveAttribute("aria-label", "Достигнут лимит: максимум 5 фото");
   });
 
   it("не даёт прикрепить больше лимита через file input", () => {
