@@ -1,9 +1,11 @@
-import { useState, useRef, useEffect, useCallback } from "react";
-import { ArrowUp, Square, X, Image, Search, Mic, MicOff, Loader2, Plus, AudioLines, Camera } from "lucide-react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { ArrowUp, Square, X, Image, Search, Mic, MicOff, Loader2, Plus, AudioLines, Camera, Volume2 } from "lucide-react";
 import { toast } from "@/components/ui/sonner";
 import { useVoice } from "@/hooks/useVoice";
 import { DialogTtsModal } from "@/components/DialogTtsModal";
 import { CameraBottomSheet } from "@/components/CameraBottomSheet";
+import { PlusMenu } from "@/components/PlusMenu";
+import type { PlusMenuItem } from "@/components/PlusMenu";
 import {
   MAX_IMAGES_PER_MESSAGE,
   blobToDataURL,
@@ -158,6 +160,44 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
   const isVoiceModeActive = voiceModeStatus === "connected" || voiceModeStatus === "connecting";
   const limitTitle = `Достигнут лимит: максимум ${MAX_IMAGES_PER_MESSAGE} фото`;
 
+  // Редкие действия прячем под «+», в строке остаются камера, голос и диктовка.
+  const plusMenuItems = useMemo<PlusMenuItem[]>(() => {
+    const items: PlusMenuItem[] = [
+      {
+        id: "attach",
+        label: "Прикрепить изображения",
+        description: `Из галереи, до ${MAX_IMAGES_PER_MESSAGE} фото`,
+        icon: Image,
+        disabled: atImageLimit,
+        disabledReason: limitTitle,
+        onSelect: () => fileInputRef.current?.click(),
+      },
+    ];
+
+    if (deepSearchEnabled) {
+      items.push({
+        id: "deep-search",
+        label: "Глубокий поиск",
+        description: "Разбор темы по источникам из интернета",
+        icon: Search,
+        disabled: deepSearchUsed,
+        disabledReason: "Лимит глубокого поиска исчерпан",
+        active: deepSearchMode,
+        onSelect: () => setDeepSearchMode((prev) => !prev),
+      });
+    }
+
+    items.push({
+      id: "tts",
+      label: "Озвучка диалога",
+      description: "Озвучить реплики разными голосами",
+      icon: Volume2,
+      onSelect: () => setTtsOpen(true),
+    });
+
+    return items;
+  }, [atImageLimit, limitTitle, deepSearchEnabled, deepSearchUsed, deepSearchMode]);
+
   return (
     <div className="mx-auto w-full max-w-3xl px-2 sm:px-4 pb-2 sm:pb-4" style={{ paddingBottom: "max(8px, env(safe-area-inset-bottom, 8px))" }}>
       {/* Image previews */}
@@ -207,15 +247,9 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
       <div className="relative flex items-end rounded-2xl border border-border bg-secondary/50 shadow-sm transition-all duration-200 focus-within:border-interactive/40 focus-within:shadow-md focus-within:shadow-interactive/5">
         <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden" onChange={handleFileSelect} data-testid="chat-file-input" />
 
-        {/* Left buttons */}
+        {/* Left buttons: частое — в строке, остальное — под «+» */}
         <div className="flex items-center pl-0.5 sm:pl-1">
-          <button
-            onClick={() => setTtsOpen(true)}
-            className="btn-interactive flex-shrink-0 rounded-lg p-2 sm:p-2.5 text-muted-foreground transition-all"
-            title="Озвучка диалога"
-          >
-            <Plus style={{ width: "18px", height: "18px" }} />
-          </button>
+          <PlusMenu items={plusMenuItems} />
 
           <button
             onClick={() => setCameraOpen(true)}
@@ -228,33 +262,6 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
           >
             <Camera style={{ width: "18px", height: "18px" }} />
           </button>
-
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={atImageLimit}
-            className={`flex-shrink-0 rounded-lg p-2 sm:p-2.5 transition-all ${
-              atImageLimit ? "text-muted-foreground/30 cursor-not-allowed" : "btn-interactive text-muted-foreground"
-            }`}
-            title={atImageLimit ? limitTitle : "Прикрепить изображения"}
-            aria-label={atImageLimit ? limitTitle : "Прикрепить изображения"}
-          >
-            <Image style={{ width: "18px", height: "18px" }} />
-          </button>
-
-          {deepSearchEnabled && (
-            <button
-              onClick={() => !deepSearchUsed && setDeepSearchMode(!deepSearchMode)}
-              disabled={deepSearchUsed}
-              className={`flex-shrink-0 rounded-lg p-2 sm:p-2.5 transition-all ${
-                deepSearchUsed ? "text-muted-foreground/30 cursor-not-allowed"
-                : deepSearchMode ? "text-interactive bg-interactive/10"
-                : "btn-interactive text-muted-foreground"
-              }`}
-              title={deepSearchUsed ? "Лимит глубокого поиска исчерпан" : "Глубокий поиск"}
-            >
-              <Search style={{ width: "18px", height: "18px" }} />
-            </button>
-          )}
 
           {onToggleVoiceMode && (
             <button
