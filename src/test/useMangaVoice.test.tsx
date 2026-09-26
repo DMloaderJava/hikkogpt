@@ -242,6 +242,20 @@ describe("useMangaVoice: запрос анализа", () => {
     expect(toast.error).toHaveBeenCalledWith("Ошибка 502");
   });
 
+  it("«Failed to fetch» превращается в понятную причину, а не в текст из браузера", async () => {
+    const hook = setup();
+    handler = async () => {
+      throw new TypeError("Failed to fetch");
+    };
+
+    await analyze(hook, 1);
+
+    expect(hook.result.current.error).toContain("Не удалось отправить запрос");
+    expect(hook.result.current.error).not.toContain("Failed to fetch");
+    expect(hook.result.current.pages[0].status).toBe("new");
+    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("Не удалось отправить запрос"));
+  });
+
   it("упавший батч не отменяет уже разобранные страницы", async () => {
     const hook = setup();
     let batch = 0;

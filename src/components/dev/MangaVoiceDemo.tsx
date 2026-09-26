@@ -129,8 +129,13 @@ if (typeof window !== "undefined" && !(window as unknown as { __mangaPreviewPatc
   const realFetch = window.fetch.bind(window);
   window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
-    if (!url.startsWith(EDGE_FUNCTIONS_URL)) return realFetch(input as RequestInfo, init);
-    const fn = url.slice(EDGE_FUNCTIONS_URL.length + 1);
+    // Ловим любой вызов edge-функций: и по URL из .env, и если страница открыта
+    // на другом хосте (превью) с иным проектом Supabase.
+    const marker = "/functions/v1/";
+    const at = url.indexOf(marker);
+    const isEdge = url.startsWith(EDGE_FUNCTIONS_URL) || at >= 0;
+    if (!isEdge) return realFetch(input as RequestInfo, init);
+    const fn = url.slice(at >= 0 ? at + marker.length : EDGE_FUNCTIONS_URL.length + 1).split(/[?#/]/)[0];
     const body = init?.body ? (JSON.parse(String(init.body)) as { images?: string[] }) : {};
     return simulatedResponse(fn, body, init?.signal) as unknown as Response;
   }) as typeof fetch;

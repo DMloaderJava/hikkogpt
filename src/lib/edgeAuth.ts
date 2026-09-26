@@ -29,17 +29,32 @@ export async function getEdgeAuthHeaders(): Promise<Record<string, string>> {
 
 /** Ошибка запроса к edge-функции с человекочитаемой причиной. */
 export class EdgeRequestError extends Error {
-  /** HTTP-код ответа; 0 — до сервера не дошли (сеть, CORS, отмена). */
+  /** HTTP-код ответа; 0 — до сервера не дошли (сеть, CORS, функция не задеплоена). */
   readonly status: number;
   /** Имя функции (`manga-analyze`, `dialog-tts`, …) — для логов. */
   readonly fn: string;
+  /** true, когда запрос не дошёл до сервера вовсе (браузерный `TypeError: Failed to fetch`). */
+  readonly network: boolean;
 
-  constructor(message: string, status: number, fn: string) {
+  constructor(message: string, status: number, fn: string, network = false) {
     super(message);
     this.name = "EdgeRequestError";
     this.status = status;
     this.fn = fn;
+    this.network = network;
   }
+}
+
+/**
+ * `TypeError: Failed to fetch` — единственная ошибка браузера без внятной
+ * причины: так выглядят и отсутствие сети, и блокировка CORS, и незадеплоенная
+ * функция. Показывать её как есть бессмысленно, поэтому формулируем сами.
+ */
+export const NETWORK_ERROR_MESSAGE =
+  "Не удалось отправить запрос: сервер недоступен (сеть, блокировщик рекламы или функция не развернута)";
+
+function isNetworkFailure(e: unknown): boolean {
+  return e instanceof TypeError;
 }
 
 /** Отмена запроса пользователем ошибкой не считается (как `AbortError` в чате). */
@@ -86,17 +101,26 @@ export async function edgeRequest(fn: string, options: EdgeRequestOptions = {}):
       !(options.body instanceof Blob) &&
       !(options.body instanceof ArrayBuffer));
 
-  const res = await fetch(`${EDGE_FUNCTIONS_URL}/${fn}`, {
-    method: "POST",
-    headers: {
-      ...(isJson ? { "Content-Type": "application/json" } : {}),
-      ...(await getEdgeAuthHeaders()),
-    },
-    ...(options.body !== undefined
-      ? { body: typeof options.body === "string" ? options.body : isJson ? JSON.stringify(options.body) : (options.body as BodyInit) }
-      : {}),
-    signal: options.signal,
-  });
+  const url = `${EDGE_FUNCTIONS_URL}/${fn}`;
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: {
+        ...(isJson ? { "Content-Type": "application/json" } : {}),
+        ...(await getEdgeAuthHeaders()),
+      },
+      ...(options.body !== undefined
+        ? { body: typeof options.body === "string" ? options.body : isJson ? JSON.stringify(options.body) : (options.body as BodyInit) }
+        : {}),
+      signal: options.signal,
+    });
+  } catch (e) {
+    // Отмену оставляем как есть: `isAbortError` отличит её от сбоя.
+    if (isAbortError(e, options.signal) || !isNetworkFailure(e)) throw e;
+    console.error(`edgeRequest(${fn}): запрос не дошёл до ${url}`, e);
+    throw new EdgeRequestError(NETWORK_ERROR_MESSAGE, 0, fn, true);
+  }
 
   if (!res.ok) throw await describeFailure(res, fn);
   return res;
