@@ -40,6 +40,7 @@ function makeConfig(overrides: Partial<ApiConfig> = {}): ApiConfig {
     host: "127.0.0.1",
     port: 0,
     version: "test",
+    isProduction: false,
     allowlist: [OWNER],
     secret: SECRET,
     staticApiKey: "",
@@ -58,6 +59,11 @@ function makeConfig(overrides: Partial<ApiConfig> = {}): ApiConfig {
     allowHeaderAuth: false,
     supabaseUrl: "",
     supabaseAnonKey: "",
+    corsOrigin: "*",
+    healthShowAllowlist: true,
+    servePlayground: true,
+    sseKeepAliveMs: 0,
+    logLevel: "silent",
     ...overrides,
   };
 }

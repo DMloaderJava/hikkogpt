@@ -26,9 +26,11 @@ api/
 │  ├─ config.ts, env.ts, types.ts
 ├─ client/src/client.ts  # TypeScript-SDK (HikkoApiClient, HikkoApiError)
 ├─ examples/             # 5 готовых примеров подключения (включая SDK `openai`)
-├─ docs/openai-compatible.md  # как подключить Cline/Cursor/Continue
+├─ docs/
+│  ├─ openai-compatible.md  # как подключить Cline/Cursor/Continue
+│  └─ deploy.md             # чек-лист, systemd, reverse-proxy с SSE
 ├─ playground.html       # страничка для ручной проверки (отдаётся на GET /)
-└─ test/                 # 45 тестов, node --test
+└─ test/                 # 56 тестов, node --test
 ```
 
 ---
@@ -249,6 +251,11 @@ Model ID:  hikko-gpt
 | `SUPABASE_URL` + `SUPABASE_ANON_KEY` | из `.env` | проверка Supabase JWT (способ 3) |
 | `ALLOW_HEADER_AUTH` | `true` в dev, `false` в production | вход по `X-Hikko-Email` |
 | `ALLOW_UNKNOWN_MODEL` | `true` | незнакомый `model` молча заменяется дефолтным; `false` → 400 |
+| `CORS_ORIGIN` | `*` | свои источники через запятую; для боя лучше не `*` |
+| `HEALTH_SHOW_ALLOWLIST` | `true` в dev, `false` в production | показывать ли e-mail в публичном `/health` |
+| `SERVE_PLAYGROUND` | `true` в dev, `false` в production | страница-песочница на `GET /` |
+| `SSE_KEEP_ALIVE_MS` | `15000` | пинги в потоке против таймаутов прокси; `0` — выключить |
+| `LOG_LEVEL` | `info` | `info` (строка на запрос), `debug`, `silent` |
 | `RATE_LIMIT_PER_MINUTE` | `600` | `0` отключает лимит |
 | `MAX_BODY_BYTES` | `1000000` | потолок размера запроса |
 | `UPSTREAM_TIMEOUT_MS` | `120000` | таймаут похода в модель |
@@ -296,7 +303,7 @@ curl -s -X POST localhost:8787/api/v1/admin/token \
 ## Тесты и типы
 
 ```bash
-npm run api:test        # node --test api/test/*.test.ts → 45 тестов
+npm run api:test        # node --test api/test/*.test.ts → 56 тестов
 npm run api:typecheck   # tsc -p tsconfig.api.json --noEmit
 ```
 
@@ -311,6 +318,23 @@ npm run api:typecheck   # tsc -p tsconfig.api.json --noEmit
 `api/` лежит вне `src/` и в сборку Vite не попадает.
 
 ---
+
+## Production
+
+`NODE_ENV=production` переключает дефолты на безопасные и **не даёт стартовать
+с дефолтным секретом** из репозитория (иначе ключ для разрешённого адреса может
+вычислить кто угодно). При запуске сервер печатает список замечаний по конфигу —
+это готовый аудит перед выкаткой.
+
+| Переменная | dev | production |
+|---|---|---|
+| `ALLOW_HEADER_AUTH` | `true` | `false` |
+| `SERVE_PLAYGROUND` | `true` | `false` |
+| `HEALTH_SHOW_ALLOWLIST` | `true` | `false` |
+| `HIKKO_API_SECRET` | дефолтный (предупреждение) | свой, иначе отказ запуска |
+
+Полная инструкция — [`docs/deploy.md`](docs/deploy.md): чек-лист, systemd-юнит,
+Caddy/nginx c настройками под SSE, проверка после деплоя.
 
 ## Ограничения (осознанные)
 

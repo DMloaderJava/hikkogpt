@@ -19,9 +19,12 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { authenticate, AuthError } from "./auth.ts";
+import type { Identity } from "./auth.ts";
 import { isAllowedEmail, normalizeEmail } from "./allowlist.ts";
-import { loadConfig } from "./config.ts";
+import { assertProductionReady, loadConfig, readinessIssues } from "./config.ts";
 import type { ApiConfig } from "./config.ts";
+import { createLogger, formatRequestLog } from "./log.ts";
+import type { Logger } from "./log.ts";
 import { apiKeyForEmail, issueToken } from "./token.ts";
 import { createRateLimiter } from "./ratelimit.ts";
 import { selectProvider, UpstreamError } from "./upstream.ts";
@@ -46,29 +49,61 @@ import type {
 export class ApiError extends Error {
   status: number;
   code: ApiErrorBody["error"]["code"];
-  constructor(status: number, code: ApiErrorBody["error"]["code"], message: string) {
+  /**
+   * `true`, если ответ клиенту уже отправлен (например, 429 с заголовком
+   * Retry-After) — тогда роутер не должен писать тело второй раз.
+   */
+  skipResponse: boolean;
+  constructor(status: number, code: ApiErrorBody["error"]["code"], message: string, skipResponse = false) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
+    this.skipResponse = skipResponse;
   }
 }
 
-const CORS_HEADERS: Record<string, string> = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, content-type, x-hikko-email, x-request-id, apikey, x-client-info",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Max-Age": "86400",
-};
+/**
+ * CORS. По умолчанию `*` (ключ всё равно обязателен), но для боевого сервера
+ * лучше перечислить свои источники: `CORS_ORIGIN=https://app.example.com`.
+ */
+function corsHeaders(config: ApiConfig): Record<string, string> {
+  return {
+    "Access-Control-Allow-Origin": config.corsOrigin,
+    "Access-Control-Allow-Headers":
+      "authorization, content-type, x-hikko-email, x-request-id, apikey, x-client-info",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Max-Age": "86400",
+    ...(config.corsOrigin !== "*" ? { Vary: "Origin" } : {}),
+  };
+}
 
-function json(res: http.ServerResponse, status: number, body: unknown, requestId: string, extra: Record<string, string> = {}): void {
+/** Комментарий SSE — держит соединение живым, пока модель «думает». */
+const SSE_PING = Buffer.from(": ping\n\n");
+
+function safeWrite(res: http.ServerResponse, data: Buffer | string): boolean {
+  if (res.writableEnded || res.destroyed) return false;
+  try {
+    return res.write(data);
+  } catch {
+    return false;
+  }
+}
+
+function json(
+  res: http.ServerResponse,
+  status: number,
+  body: unknown,
+  requestId: string,
+  config: ApiConfig,
+  extra: Record<string, string> = {},
+): void {
   const payload = JSON.stringify(body);
   res.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
     "Content-Length": Buffer.byteLength(payload),
     "X-Request-Id": requestId,
-    ...CORS_HEADERS,
+    ...corsHeaders(config),
     ...extra,
   });
   res.end(payload);
@@ -83,7 +118,7 @@ function fail(res: http.ServerResponse, requestId: string, status: number, code:
       ...(code === "forbidden" || code === "unauthorized" ? { allowed_emails: config.allowlist } : {}),
     },
   };
-  json(res, status, body, requestId);
+  json(res, status, body, requestId, config);
 }
 
 async function readBody(req: http.IncomingMessage, limit: number): Promise<unknown> {
@@ -321,6 +356,7 @@ export interface ServerDeps {
   config: ApiConfig;
   limiter: ReturnType<typeof createRateLimiter>;
   provider: ReturnType<typeof selectProvider>;
+  log: Logger;
 }
 
 function buildUpstreamRequest(request: ChatCompletionRequest, config: ApiConfig, requestId: string): UpstreamRequest {
@@ -377,13 +413,18 @@ function assertModelAllowed(request: ChatCompletionRequest, config: ApiConfig): 
   );
 }
 
-function healthPayload(config: ApiConfig): HealthResponse {
+/**
+ * `allowlist` в /health — только если разрешено публично
+ * (`HEALTH_SHOW_ALLOWLIST=true`) или запрос пришёл с ключом разрешённого адреса:
+ * показывать чужой e-mail всем подряд не стоит.
+ */
+function healthPayload(config: ApiConfig, allowedViewer: boolean): HealthResponse {
   return {
     status: "ok",
     service: "hikko-private-api",
     version: config.version,
     mode: config.mode,
-    allowlist: config.allowlist,
+    allowlist: config.healthShowAllowlist || allowedViewer ? config.allowlist : [],
     models: config.models,
     streaming: true,
     time: new Date().toISOString(),
@@ -407,13 +448,14 @@ function modelsPayload(config: ApiConfig): ModelsResponse {
   };
 }
 
-function accountPayload(email: string, method: AccountResponse["auth_method"], keyKind: AccountResponse["key_kind"], deps: ServerDeps, requestId: string): AccountResponse {
+function accountPayload(identity: Identity, deps: ServerDeps, requestId: string): AccountResponse {
+  const { email } = identity;
   const snapshot = deps.limiter.peek(email);
   return {
     email,
     allowed: true,
-    auth_method: method,
-    key_kind: keyKind,
+    auth_method: identity.method,
+    key_kind: identity.keyKind,
     unlimited: isAllowedEmail(email, deps.config.allowlist),
     rate_limit: {
       limit: snapshot.limit,
@@ -425,7 +467,12 @@ function accountPayload(email: string, method: AccountResponse["auth_method"], k
   };
 }
 
-async function handleChat(req: http.IncomingMessage, res: http.ServerResponse, deps: ServerDeps, requestId: string): Promise<void> {
+async function handleChat(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  deps: ServerDeps,
+  requestId: string,
+): Promise<Identity> {
   const identity = await authenticate({ headers: toHeaders(req), config: deps.config });
   const limit = deps.limiter.hit(identity.email);
   if (!limit.allowed) {
@@ -434,9 +481,11 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse, d
       429,
       { error: { message: `Превышен лимит ${limit.limit} запросов в минуту.`, code: "rate_limited", request_id: requestId } } satisfies ApiErrorBody,
       requestId,
+      deps.config,
       { "Retry-After": String(limit.retryAfterSeconds) },
     );
-    return;
+    // Ответ уже ушёл клиенту — сообщаем роутеру не писать тело повторно.
+    throw new ApiError(429, "rate_limited", "Превышен лимит запросов.", true);
   }
 
   const request = validateChatRequest(await readBody(req, deps.config.maxBodyBytes));
@@ -451,25 +500,51 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse, d
       Connection: "keep-alive",
       "X-Request-Id": requestId,
       "X-Accel-Buffering": "no",
-      ...CORS_HEADERS,
+      ...corsHeaders(deps.config),
     });
     res.flushHeaders?.();
+
     const reader = deps.provider.completeStream(upstreamRequest).getReader();
+    // Пинги нужны, когда модель думает дольше idle-таймаута прокси: Cline и
+    // nginx/Caddy иначе рвут «молчащее» соединение. Интервал — SSE_KEEP_ALIVE_MS.
+    const keepAliveMs = deps.config.sseKeepAliveMs;
+    let timer: ReturnType<typeof setInterval> | undefined;
+    if (keepAliveMs > 0) {
+      timer = setInterval(() => {
+        if (!safeWrite(res, SSE_PING) && timer) clearInterval(timer);
+      }, keepAliveMs);
+      timer.unref?.();
+    }
+
     try {
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
-        const ok = res.write(Buffer.from(value as Uint8Array));
-        if (!ok) await new Promise<void>((resolve) => res.once("drain", resolve));
+        if (!safeWrite(res, Buffer.from(value as Uint8Array))) break; // клиент отвалился
+        if (!res.writableEnded && (res as unknown as { writableNeedDrain?: boolean }).writableNeedDrain) {
+          await new Promise<void>((resolve) => res.once("drain", resolve));
+        }
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      res.write(Buffer.from(`data: ${JSON.stringify({ error: { message, code: "upstream_error", request_id: requestId } })}\n\n`));
+      deps.log(`WARN [${requestId}] поток прерван: ${message}`);
+      safeWrite(
+        res,
+        Buffer.from(
+          `data: ${JSON.stringify({ error: { message, code: "upstream_error", request_id: requestId } })}\n\n`,
+        ),
+      );
     } finally {
+      if (timer) clearInterval(timer);
+      try {
+        await reader.cancel().catch(() => {});
+      } catch {
+        /* поток уже закрыт */
+      }
       reader.releaseLock();
-      res.end();
+      if (!res.writableEnded) res.end();
     }
-    return;
+    return identity;
   }
 
   const result = await deps.provider.complete(upstreamRequest);
@@ -500,7 +575,8 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse, d
     account: { email: identity.email },
     request_id: requestId,
   };
-  json(res, 200, response, requestId);
+  json(res, 200, response, requestId, deps.config);
+  return identity;
 }
 
 async function handleAdminToken(req: http.IncomingMessage, res: http.ServerResponse, deps: ServerDeps, requestId: string): Promise<void> {
@@ -535,14 +611,19 @@ async function handleAdminToken(req: http.IncomingMessage, res: http.ServerRespo
       request_id: requestId,
     },
     requestId,
+    config,
   );
 }
 
-function servePlayground(res: http.ServerResponse, requestId: string): void {
+function servePlayground(res: http.ServerResponse, requestId: string, config: ApiConfig): void {
   const file = path.join(repoRoot, "api", "playground.html");
   fs.readFile(file, (error, data) => {
     if (error) {
-      res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8", "X-Request-Id": requestId, ...CORS_HEADERS });
+      res.writeHead(404, {
+        "Content-Type": "text/plain; charset=utf-8",
+        "X-Request-Id": requestId,
+        ...corsHeaders(config),
+      });
       res.end("playground.html не найден");
       return;
     }
@@ -550,7 +631,7 @@ function servePlayground(res: http.ServerResponse, requestId: string): void {
       "Content-Type": "text/html; charset=utf-8",
       "Content-Length": data.length,
       "X-Request-Id": requestId,
-      ...CORS_HEADERS,
+      ...corsHeaders(config),
     });
     res.end(data);
   });
@@ -558,44 +639,88 @@ function servePlayground(res: http.ServerResponse, requestId: string): void {
 
 /** Чистая функция маршрутизации — удобно тестировать без поднятого порта. */
 export async function routeRequest(req: http.IncomingMessage, res: http.ServerResponse, deps: ServerDeps): Promise<void> {
-  const requestId = (toHeaders(req).get("x-request-id") ?? crypto.randomUUID()).slice(0, 64);
+  const headers = toHeaders(req);
+  const requestId = (headers.get("x-request-id") ?? crypto.randomUUID()).slice(0, 64);
   const method = (req.method ?? "GET").toUpperCase();
   const url = new URL(req.url ?? "/", "http://internal");
   const rawRoute = url.pathname.replace(/\/+$/, "") || "/";
   const route = ROUTE_ALIASES[rawRoute] ?? rawRoute;
+  const startedAt = Date.now();
+  // Кто обратился и что запросил — попадает в лог одной строкой в конце.
+  const ctx: { email?: string; authMethod?: string; model?: string; stream?: boolean } = {};
+  const finish = (status: number): void => {
+    deps.log(
+      formatRequestLog({
+        method,
+        route: rawRoute,
+        status,
+        startedAt,
+        requestId,
+        ...(ctx.email ? { email: ctx.email } : {}),
+        ...(ctx.authMethod ? { authMethod: ctx.authMethod } : {}),
+        ...(ctx.model ? { model: ctx.model } : {}),
+        ...(ctx.stream !== undefined ? { stream: ctx.stream } : {}),
+      }),
+    );
+  };
+  const respond = (status: number): number => {
+    finish(status);
+    return status;
+  };
 
   if (method === "OPTIONS") {
-    res.writeHead(204, CORS_HEADERS);
+    res.writeHead(respond(204), corsHeaders(deps.config));
     res.end();
     return;
   }
 
   try {
     if (route === "/" && (method === "GET" || method === "HEAD")) {
-      servePlayground(res, requestId);
+      if (!deps.config.servePlayground) {
+        fail(res, requestId, 404, "not_found", "Маршрут / не найден.", deps.config);
+        respond(404);
+        return;
+      }
+      servePlayground(res, requestId, deps.config);
+      respond(200);
       return;
     }
     if (route === "/api/v1/health" && (method === "GET" || method === "HEAD")) {
-      json(res, 200, healthPayload(deps.config), requestId);
+      // /health открыт без ключа (нужен для health-check прокси), но e-mail из
+      // белого списка показываем только своим — иначе адрес утекает всем.
+      const viewer = await authenticate({ headers, config: deps.config, skipSupabase: true }).catch(() => null);
+      if (viewer) {
+        ctx.email = viewer.email;
+        ctx.authMethod = viewer.method;
+      }
+      json(res, respond(200), healthPayload(deps.config, Boolean(viewer)), requestId, deps.config);
       return;
     }
     if (route === "/api/v1/account" && method === "GET") {
-      const identity = await authenticate({ headers: toHeaders(req), config: deps.config });
-      json(res, 200, accountPayload(identity.email, identity.method, identity.keyKind, deps, requestId), requestId);
+      const identity = await authenticate({ headers, config: deps.config });
+      ctx.email = identity.email;
+      ctx.authMethod = identity.method;
+      json(res, respond(200), accountPayload(identity, deps, requestId), requestId, deps.config);
       return;
     }
     if (route === "/api/v1/models" && (method === "GET" || method === "HEAD")) {
       // Список моделей — за ключом: адрес из белого списка видно только своим.
-      await authenticate({ headers: toHeaders(req), config: deps.config });
-      json(res, 200, modelsPayload(deps.config), requestId);
+      const identity = await authenticate({ headers, config: deps.config });
+      ctx.email = identity.email;
+      ctx.authMethod = identity.method;
+      json(res, respond(200), modelsPayload(deps.config), requestId, deps.config);
       return;
     }
     if (route === "/api/v1/chat/completions" && method === "POST") {
-      await handleChat(req, res, deps, requestId);
+      const identity = await handleChat(req, res, deps, requestId);
+      ctx.email = identity.email;
+      ctx.authMethod = identity.method;
+      respond(res.statusCode || 200);
       return;
     }
     if (route === "/api/v1/admin/token" && method === "POST") {
       await handleAdminToken(req, res, deps, requestId);
+      respond(res.statusCode || 201);
       return;
     }
 
@@ -608,35 +733,52 @@ export async function routeRequest(req: http.IncomingMessage, res: http.ServerRe
         `Маршрут ${rawRoute} не найден. OpenAI-совместимые: GET /v1/models, POST /v1/chat/completions (то же самое доступно как /api/v1/…).`,
         deps.config,
       );
+      respond(404);
       return;
     }
     fail(res, requestId, 405, "method_not_allowed", `Метод ${method} не поддерживается маршрутом ${route}.`, deps.config);
+    respond(405);
   } catch (error) {
     if (error instanceof AuthError) {
       fail(res, requestId, error.status, error.code, error.message, deps.config);
+      respond(error.status);
       return;
     }
     if (error instanceof ApiError) {
-      fail(res, requestId, error.status, error.code, error.message, deps.config);
+      if (!error.skipResponse) {
+        fail(res, requestId, error.status, error.code, error.message, deps.config);
+      }
+      respond(error.status);
       return;
     }
     if (error instanceof UpstreamError) {
       fail(res, requestId, error.status, "upstream_error", error.message, deps.config);
+      respond(error.status);
       return;
     }
     const message = error instanceof Error ? error.message : String(error);
-    console.error(`[${requestId}] необработанная ошибка:`, error);
+    deps.log(`ERROR [${requestId}] необработанная ошибка: ${message}`);
     fail(res, requestId, 500, "internal_error", message, deps.config);
+    respond(500);
   }
 }
 
 /* ------------------------------------------------------------------ запуск ---- */
 
-export function createServer(config: ApiConfig = loadConfig()): http.Server {
+/**
+ * Собрать сервер. `overrides` нужен тестам: подменить провайдер (фейковый шлюз)
+ * или логгер (тишина), не трогая остальное.
+ */
+export function createServer(config: ApiConfig = loadConfig(), overrides: Partial<ServerDeps> = {}): http.Server {
+  // В production с дефолтным секретом из репозитория стартовать нельзя:
+  // ключ для разрешённого адреса тогда может вычислить кто угодно.
+  assertProductionReady(config);
   const deps: ServerDeps = {
     config,
     limiter: createRateLimiter(config.rateLimitPerMinute),
     provider: selectProvider(config),
+    log: createLogger(config),
+    ...overrides,
   };
   return http.createServer((req, res) => {
     void routeRequest(req, res, deps);
@@ -650,7 +792,19 @@ function isMain(): boolean {
 
 if (isMain()) {
   const config = loadConfig();
-  const server = createServer(config);
+  for (const issue of readinessIssues(config)) {
+    const label = issue.level === "error" ? "ОШИБКА" : "ВНИМАНИЕ";
+    console.warn(`  ${label}: ${issue.message}`);
+  }
+
+  let server: http.Server;
+  try {
+    server = createServer(config);
+  } catch (error) {
+    // Например, production с дефолтным секретом: падем чисто, без простыни стека.
+    console.error(`\n  ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(1);
+  }
   server.listen(config.port, config.host, () => {
     const shown = config.host === "0.0.0.0" ? "localhost" : config.host;
     console.log(`\n  hikkoGPT private API v${config.version}`);
@@ -660,7 +814,11 @@ if (isMain()) {
     for (const email of config.allowlist) {
       console.log(`  ➜  ключ для ${email}: ${apiKeyForEmail(email, config.secret, config.staticApiKey)}`);
     }
-    console.log(`  ➜  песочница: http://${shown}:${config.port}/`);
+    if (config.servePlayground) {
+      console.log(`  ➜  песочница: http://${shown}:${config.port}/`);
+    } else {
+      console.log("  ➜  песочница на GET / выключена (SERVE_PLAYGROUND=false)");
+    }
     console.log("  ➜  OpenAI Compatible (Cline, Cursor, Continue, LangChain):");
     console.log(`       Base URL: http://${shown}:${config.port}/v1   (ключ — тот же, что выше)`);
     console.log(`       Model ID: ${config.defaultModel}\n`);

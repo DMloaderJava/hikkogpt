@@ -139,6 +139,7 @@ function apiConfig(upstreamPort: number): ApiConfig {
     host: "127.0.0.1",
     port: 0,
     version: "test",
+    isProduction: false,
     allowlist: [OWNER],
     secret: SECRET,
     staticApiKey: "",
@@ -157,6 +158,11 @@ function apiConfig(upstreamPort: number): ApiConfig {
     allowHeaderAuth: false,
     supabaseUrl: "",
     supabaseAnonKey: "",
+    corsOrigin: "*",
+    healthShowAllowlist: true,
+    servePlayground: true,
+    sseKeepAliveMs: 0,
+    logLevel: "silent",
   };
 }
 
