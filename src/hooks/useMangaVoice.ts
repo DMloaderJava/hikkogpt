@@ -9,7 +9,12 @@
  *    а тяжёлая подготовка данных (сжатие сканов в dataURL) идёт фоном и не
  *    блокирует интерфейс;
  * 2. запрос уходит через общий `edgeRequest` (те же заголовки `Authorization` +
- *    `apikey`, тот же JSON-контракт) и обязательно принимает `signal`;
+ *    `apikey`, тот же JSON-контракт) и обязательно принимает `signal`; у него же
+ *    таймаут на установку ответа и один повтор на сетевой сбой — «Failed to
+ *    fetch» больше не показывается пользователю как есть;
+ *    тело `manga-analyze` планируется по фактическому размеру страниц
+ *    (`prepareAnalyzePayload` + `planAnalyzeBatches`), поэтому батч не
+ *    раздувается до десятков мегабайт и не обрывается на плохой сети;
  * 3. длительные задачи можно прервать — `stop()` рвёт текущий запрос и всю
  *    очередь, как `stopStreaming()` в чате;
  * 4. отмена не показывается ошибкой (`isAbortError`), а причина отказа от
@@ -31,8 +36,11 @@ import { EdgeRequestError, edgeBlob, edgeJson, isAbortError } from "@/lib/edgeAu
 import { announceStopSpeech } from "@/lib/speechEvents";
 import {
   ANALYZE_BATCH_SIZE,
+  ANALYZE_PAYLOAD_BUDGET,
   filterPageFiles,
   formatRejections,
+  planAnalyzeBatches,
+  prepareAnalyzePayload,
   toPageDataURL,
 } from "@/lib/mangaPages";
 import {
@@ -68,6 +76,8 @@ export type VoicesMap = Record<string, TtsVoice>;
 
 /** Прогресс анализа: сколько страниц уже разобрано в текущем запуске. */
 export interface AnalyzeProgress {
+  /** true, пока страницы сжимаются в dataURL — тело запроса ещё не ушло. */
+  preparing?: boolean;
   /** Номер текущего батча (1..batches). */
   batch: number;
   /** Сколько всего батчей в этом запуске. */
@@ -96,12 +106,6 @@ export function releasePage(page: Pick<MangaPage, "url" | "audio">) {
     // URL уже отозван — не критично
   }
 }
-
-const chunk = <T,>(items: T[], size: number): T[][] => {
-  const out: T[][] = [];
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
-  return out;
-};
 
 /** Ответ модели → поля страницы: пустые значения не затирают прежние. */
 function applyAnalyzeResult(page: MangaPage, item: AnalyzePageResult | undefined): MangaPage {
@@ -271,42 +275,44 @@ export function useMangaVoice() {
     const queue = pagesRef.current.filter((p) => p.status !== "ready");
     if (!queue.length) return true;
 
-    const batches = chunk(queue, ANALYZE_BATCH_SIZE);
     runningRef.current = true;
     stoppedRef.current = false;
     setIsAnalyzing(true);
     setError("");
-    setAnalyzeProgress({ batch: 1, batches: batches.length, total: queue.length, done: 0 });
+    setAnalyzeProgress({ preparing: true, batch: 1, batches: 1, total: queue.length, done: 0 });
 
     const runId = (runIdRef.current += 1);
     const controller = new AbortController();
     abortRef.current = controller;
 
     const queuedIds = new Set(queue.map((p) => p.id));
-    // UI сразу показывает, что страницы в работе; сжатие сканов идёт следом.
+    // UI сразу показывает, что страницы в работе; тяжёлая подготовка тела идёт следом.
     updatePages((prev) => prev.map((p) => (queuedIds.has(p.id) ? { ...p, status: "analyzing" } : p)));
 
     const failures: string[] = [];
     let done = 0;
 
     try {
+      // Готовим всё тело заранее: страницы уменьшаются до 1600 px и пережимаются,
+      // а батчи режутся уже по фактическому размеру payload, а не «на глаз».
+      // Иначе 5 сканов по 1.5 МБ — это ~10 МБ в одном POST: такой запрос чаще
+      // всего и заканчивается сетевым сбоем («Failed to fetch»).
+      const payload = await prepareAnalyzePayload(queue);
+      if (stoppedRef.current || controller.signal.aborted) return failures.length === 0;
+
+      const batches = planAnalyzeBatches(payload);
+
       for (let i = 0; i < batches.length; i += 1) {
         if (stoppedRef.current || controller.signal.aborted) break;
 
         const batch = batches[i];
-        const batchIds = batch.map((p) => p.id);
+        const batchIds = batch.pages.map((p) => p.id);
         setAnalyzeProgress({ batch: i + 1, batches: batches.length, total: queue.length, done });
 
         try {
-          // Страницы уменьшаются до 1600 px и пережимаются: батч из 5 сканов по
-          // 10 МБ в base64 — это десятки мегабайт в одном запросе, он не проходит
-          // по лимитам модели и edge-функции.
-          const images = await Promise.all(batch.map((p) => toPageDataURL(p.file)));
-          if (stoppedRef.current || controller.signal.aborted) break;
-
           const data = await edgeJson<{ pages?: AnalyzePageResult[] }>(
             MANGA_ANALYZE_FN,
-            { images },
+            { images: batch.images },
             controller.signal
           );
           const result: AnalyzePageResult[] = Array.isArray(data?.pages) ? data.pages : [];
@@ -319,23 +325,26 @@ export function useMangaVoice() {
               return applyAnalyzeResult(p, result[index]);
             })
           );
-          done += batch.length;
+          done += batch.pages.length;
         } catch (e) {
           if (isAbortError(e, controller.signal)) break;
           console.error("manga-analyze error:", e);
           const reason = e instanceof Error ? e.message : "Ошибка анализа";
           failures.push(reason);
           reportFailure(
-            batches.length > 1
-              ? `Батч ${i + 1} из ${batches.length}: ${reason}`
-              : reason,
+            batches.length > 1 ? `Батч ${i + 1} из ${batches.length}: ${reason}` : reason,
             "Ошибка анализа страниц"
           );
           // Страницы этого батча возвращаются в очередь — их можно отправить снова.
-          updatePages((prev) =>
-            prev.map((p) => (batchIds.includes(p.id) ? { ...p, status: "new" } : p))
-          );
+          updatePages((prev) => prev.map((p) => (batchIds.includes(p.id) ? { ...p, status: "new" } : p)));
         }
+      }
+    } catch (e) {
+      // Подготовка тела (чтение/сжатие файлов) — тоже часть запроса.
+      if (!isAbortError(e, controller.signal)) {
+        console.error("manga-analyze prepare error:", e);
+        failures.push(e instanceof Error ? e.message : "Ошибка подготовки страниц");
+        reportFailure(failures[0], "Не удалось подготовить страницы к анализу");
       }
     } finally {
       // Всё, что осталось «в анализе» (остановка или сбой), возвращается в `new`.

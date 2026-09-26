@@ -64,7 +64,7 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
 
   const analyzeLabel = (() => {
     if (isAnalyzing) {
-      if (!analyzeProgress) return "Анализирую…";
+      if (!analyzeProgress || analyzeProgress.preparing) return "Готовлю страницы к отправке…";
       const from = analyzeProgress.done + 1;
       const to = Math.min(analyzeProgress.done + ANALYZE_BATCH_SIZE, analyzeProgress.total);
       const suffix = analyzeProgress.batches > 1 ? ` из ${analyzeProgress.total}` : "";
@@ -161,7 +161,7 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
           </div>
         )}
 
-        {isAnalyzing && analyzeProgress && analyzeProgress.batches > 1 && (
+        {isAnalyzing && analyzeProgress && !analyzeProgress.preparing && analyzeProgress.batches > 1 && (
           <p className="mb-3 text-[11px] text-muted-foreground">
             Батч {analyzeProgress.batch} из {analyzeProgress.batches} · обработано {analyzeProgress.done} из{" "}
             {analyzeProgress.total} страниц

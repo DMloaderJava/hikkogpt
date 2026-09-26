@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { MangaVoiceModal } from "@/components/MangaVoiceModal";
 import { ANALYZE_BATCH_SIZE } from "@/lib/mangaPages";
+import { EDGE_FUNCTIONS_URL } from "@/lib/edgeAuth";
 
 /**
  * Озвучиватель манги целиком: добавление страниц, анализ по батчам, правка
@@ -153,7 +154,7 @@ describe("MangaVoiceModal: анализ", () => {
     expect(screen.getByText("Второй кадр")).toBeTruthy();
 
     const analyzeCall = calls.find((c) => c.url.endsWith("/manga-analyze"));
-    expect(analyzeCall?.url).toBe(`${"https://xnhtuhvcrozgzcytnnco.supabase.co"}/functions/v1/manga-analyze`);
+    expect(analyzeCall?.url).toBe(`${EDGE_FUNCTIONS_URL}/manga-analyze`);
     expect(analyzeCall?.body.images).toHaveLength(2);
     expect(analyzeCall?.body.images[0].startsWith("data:image/png;base64,")).toBe(true);
 

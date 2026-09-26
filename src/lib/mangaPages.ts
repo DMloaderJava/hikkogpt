@@ -20,8 +20,23 @@ export const ACCEPTED_PAGE_TYPES = ["image/png", "image/jpeg", "image/webp"] as 
 export const ACCEPTED_PAGE_ACCEPT = "image/png,image/jpeg,image/webp";
 /** Лимит исходного файла (такой же показывается в подсказке). */
 export const MAX_PAGE_FILE_BYTES = 10 * 1024 * 1024;
-/** Сколько страниц анализируется за один запрос к `manga-analyze`. */
+/** Сколько страниц анализируется за один запрос к `manga-analyze` (лимит сервера). */
 export const ANALYZE_BATCH_SIZE = 5;
+/**
+ * Бюджет тела одного запроса к `manga-analyze` в символах JSON.
+ *
+ * Сервер принимает до 5 картинок по 14 млн символов, то есть формально влезает
+ * ~70 МБ, но на практике такой POST живёт долго и обрывается на первом же
+ * нестабильном участке сети (браузер сообщает об этом как «Failed to fetch»).
+ * Поэтому клиент сам держит тело запроса в пределах нескольких мегабайт и при
+ * необходимости режет батч на части: 3 страницы по 1.5 МБ надёжнее, чем 5.
+ */
+export const ANALYZE_PAYLOAD_BUDGET = 6_000_000;
+/** Запас на оформление JSON (кавычки, запятые, ключи) вокруг dataURL. */
+export const ANALYZE_PAYLOAD_OVERHEAD_PER_IMAGE = 32;
+/** Насколько сильнее сжимать страницу, если батч не влезает в бюджет. */
+export const ANALYZE_FALLBACK_MAX_SIDE_PX = 1280;
+export const ANALYZE_FALLBACK_MAX_BYTES = 700_000;
 /** Больше не нужно: модель всё равно ресемплит вход, а реплики читаются и так. */
 export const MAX_PAGE_SIDE_PX = 1600;
 /** Сколько байт занимает base64 одной страницы после сжатия. */
@@ -179,4 +194,122 @@ export function formatRejections(rejected: PageFileRejection[]): string {
   const shown = rejected.slice(0, 3).map((r) => `${r.name} — ${r.reason}`).join("; ");
   const rest = rejected.length > 3 ? ` и ещё ${rejected.length - 3}` : "";
   return `Не добавлено: ${shown}${rest}`;
+}
+
+
+/* ------------------------------------------------------------------ */
+/* Планирование запроса к `manga-analyze`                              */
+/* ------------------------------------------------------------------ */
+
+/** Страница, готовая к отправке: её dataURL и фактический размер. */
+export interface PreparedPage<T> {
+  page: T;
+  dataUrl: string;
+  /** Сколько символов dataURL займёт в JSON. */
+  chars: number;
+}
+
+/**
+ * Готовит страницы к анализу: сначала обычное сжатие, затем — более жёсткое для
+ * тех, из-за кого батч не влезает в бюджет. Всегда возвращает список той же
+ * длины и в том же порядке.
+ */
+export async function prepareAnalyzePayload<T>(
+  pages: T[],
+  options: {
+    budget?: number;
+    toDataUrl?: (page: T) => Promise<string>;
+    maxSide?: number;
+    maxBytes?: number;
+  } = {}
+): Promise<PreparedPage<T>[]> {
+  const budget = options.budget ?? ANALYZE_PAYLOAD_BUDGET;
+  const toDataUrl =
+    options.toDataUrl ??
+    // По умолчанию элемент очереди — сам файл (или объект с полем `file`).
+    ((page: T) => {
+      const source = (page as unknown as { file?: Blob }).file ?? (page as unknown as Blob);
+      return toPageDataURL(source);
+    });
+
+  const first = await Promise.all(pages.map(toDataUrl));
+  const prepared = first.map((dataUrl, i) => ({ page: pages[i], dataUrl, chars: dataUrl.length }));
+
+  const naive = planAnalyzeBatches(prepared, budget);
+  const oversized = naive.filter((batch) => batch.chars > budget);
+  if (!oversized.length) return prepared;
+
+  // Батч не влезает: пережимаем его страницы жёстче (меньше сторона и лимит).
+  const needFallback = new Set<number>();
+  for (const batch of oversized) {
+    batch.items.forEach((item) => needFallback.add(prepared.indexOf(item)));
+  }
+
+  const fallbackSide = options.maxSide ?? ANALYZE_FALLBACK_MAX_SIDE_PX;
+  const fallbackBytes = options.maxBytes ?? ANALYZE_FALLBACK_MAX_BYTES;
+  return Promise.all(
+    prepared.map(async (item, i) => {
+      if (!needFallback.has(i)) return item;
+      try {
+        const source = (item.page as unknown as { file?: Blob }).file ?? (item.page as unknown as Blob);
+        const dataUrl = await toPageDataURL(source, {
+          maxSide: fallbackSide,
+          maxBytes: fallbackBytes,
+        });
+        return { ...item, dataUrl, chars: dataUrl.length };
+      } catch {
+        return item; // сжатие недоступно — отправим как есть
+      }
+    })
+  );
+}
+
+export interface AnalyzeBatch<T> {
+  pages: T[];
+  images: string[];
+  /** Размер тела запроса в символах JSON. */
+  chars: number;
+  items: PreparedPage<T>[];
+}
+
+/**
+ * Режет подготовленные страницы на батчи: не больше `ANALYZE_BATCH_SIZE` штук
+ * (лимит сервера) и не больше `budget` символов в теле запроса. Одна страница
+ * всегда образует батч, даже если она больше бюджета, — иначе её невозможно
+ * отправить в принципе.
+ */
+export function planAnalyzeBatches<T>(
+  prepared: PreparedPage<T>[],
+  budget: number = ANALYZE_PAYLOAD_BUDGET
+): AnalyzeBatch<T>[] {
+  const batches: AnalyzeBatch<T>[] = [];
+  let current: PreparedPage<T>[] = [];
+  let chars = 0;
+
+  const flush = () => {
+    if (!current.length) return;
+    batches.push({
+      pages: current.map((item) => item.page),
+      images: current.map((item) => item.dataUrl),
+      chars,
+      items: current,
+    });
+    current = [];
+    chars = 0;
+  };
+
+  for (const item of prepared) {
+    const size = item.chars + ANALYZE_PAYLOAD_OVERHEAD_PER_IMAGE;
+    if (current.length && (current.length >= ANALYZE_BATCH_SIZE || chars + size > budget)) flush();
+    current.push(item);
+    chars += size;
+  }
+  flush();
+
+  return batches;
+}
+
+/** Размер тела запроса `{ images: [...] }` в символах — для тестов и логов. */
+export function estimateAnalyzePayloadChars(images: string[]): number {
+  return images.reduce((sum, url) => sum + url.length + ANALYZE_PAYLOAD_OVERHEAD_PER_IMAGE, 0);
 }

@@ -4,7 +4,8 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { toast } from "sonner";
 import { useMangaVoice, type VoicesMap } from "@/hooks/useMangaVoice";
-import { ANALYZE_BATCH_SIZE } from "@/lib/mangaPages";
+import { ANALYZE_BATCH_SIZE, ANALYZE_PAYLOAD_BUDGET } from "@/lib/mangaPages";
+import { EDGE_FUNCTIONS_URL, SUPABASE_FUNCTIONS_URL, withRequestTimeout } from "@/lib/edgeAuth";
 
 /**
  * Метод запросов озвучивателя манги (`useMangaVoice`).
@@ -137,7 +138,7 @@ describe("useMangaVoice: запрос анализа", () => {
     await analyze(hook, 2);
 
     const call = calls.find((c) => c.fn === "manga-analyze");
-    expect(call?.url).toBe(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/manga-analyze`);
+    expect(call?.url).toBe(`${EDGE_FUNCTIONS_URL}/manga-analyze`);
     expect(call?.init.method).toBe("POST");
     const headers = call?.init.headers as Record<string, string>;
     expect(headers["Content-Type"]).toBe("application/json");
@@ -240,6 +241,23 @@ describe("useMangaVoice: запрос анализа", () => {
 
     expect(hook.result.current.error).toBe("Ошибка 502");
     expect(toast.error).toHaveBeenCalledWith("Ошибка 502");
+  });
+
+  it("тело каждого запроса не превышает бюджет payload", async () => {
+    const hook = setup();
+    handler = async (fn, body) =>
+      fn === "manga-analyze" ? analyzePagesResponse(body.images?.length ?? 0) : audioResponse();
+
+    await analyze(hook, 7);
+
+    const analyzeCalls = calls.filter((c) => c.fn === "manga-analyze");
+    expect(analyzeCalls.length).toBeGreaterThan(0);
+    for (const call of analyzeCalls) {
+      const json = JSON.stringify({ images: call.body.images });
+      expect(call.body.images!.length).toBeLessThanOrEqual(ANALYZE_BATCH_SIZE);
+      // +2 — кавычки вокруг всего тела запроса.
+      expect(json.length + 2).toBeLessThanOrEqual(ANALYZE_PAYLOAD_BUDGET);
+    }
   });
 
   it("«Failed to fetch» превращается в понятную причину, а не в текст из браузера", async () => {

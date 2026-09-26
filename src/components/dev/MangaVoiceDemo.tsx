@@ -180,8 +180,14 @@ export function MangaVoiceDemo() {
         </h1>
         <p className="mt-1 text-xs text-muted-foreground">
           Запросы к <code className="text-foreground">manga-analyze</code> и{" "}
-          <code className="text-foreground">dialog-tts</code> здесь имитируются, весь клиентский код — настоящий.
-          Сейчас: {active.label} ({active.hint}).
+          <code className="text-foreground">dialog-tts</code> здесь имитируются, весь клиентский код — настоящий:
+          видны батчи, «Стоп», тексты ошибок и то, что каждый запрос уходит со своим{" "}
+          <code className="text-foreground">signal</code>. Сейчас: {active.label} ({active.hint}).
+        </p>
+        <p className="mt-1 text-[11px] text-muted-foreground">
+          Настоящие edge-функции в песочнице предпросмотра недоступны — исходящие соединения к{" "}
+          <code>*.supabase.co</code> закрыты, браузер в таких условиях и показывает «Failed to fetch».
+          Локально и на проде запросы идут через dev-прокси Vite (свой origin) и работают как обычно.
         </p>
 
         <div className="mt-2 flex flex-wrap items-center gap-2">
