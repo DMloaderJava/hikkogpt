@@ -32,6 +32,7 @@ function makeConfig(overrides: Partial<ApiConfig> = {}): ApiConfig {
     mode: "echo",
     models: ["hikko-gpt", "hikko-gpt-turbo", "hikko-gpt-smart"],
     defaultModel: "hikko-gpt",
+    allowUnknownModel: true,
     systemPrompt: "Ты — hikkoGPT.",
     rateLimitPerMinute: 0, // в тестах лимит по умолчанию выключен
     maxBodyBytes: 100_000,
@@ -147,7 +148,7 @@ test("POST /api/v1/chat/completions возвращает OpenAI-подобный
     assert.equal(data.provider, "echo");
     assert.equal(data.account.email, OWNER);
     assert.equal(data.choices[0].message.role, "assistant");
-    assert.match(data.choices[0].message.content, /Привет!/);
+    assert.match(data.choices[0].message.content ?? "", /Привет!/);
     assert.equal(data.usage.prompt_messages, 1);
   });
 });

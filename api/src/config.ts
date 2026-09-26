@@ -25,6 +25,12 @@ export interface ApiConfig {
   mode: ApiMode;
   models: HikkoModel[];
   defaultModel: HikkoModel;
+  /**
+   * Пускать ли запросы с незнакомым `model`. По умолчанию да: Cline/Cursor
+   * подставляют тот id, который ввёл пользователь, и жёсткий отказ ломал бы
+   * подключение. `ALLOW_UNKNOWN_MODEL=false` включает строгую проверку.
+   */
+  allowUnknownModel: boolean;
   systemPrompt: string;
   rateLimitPerMinute: number;
   maxBodyBytes: number;
@@ -70,6 +76,7 @@ export function loadConfig(): ApiConfig {
     mode,
     models: ["hikko-gpt", "hikko-gpt-turbo", "hikko-gpt-smart"],
     defaultModel: envString("DEFAULT_MODEL", "hikko-gpt"),
+    allowUnknownModel: envString("ALLOW_UNKNOWN_MODEL", "true") !== "false",
     systemPrompt: envString("HIKKO_SYSTEM_PROMPT", SYSTEM_PROMPT),
     rateLimitPerMinute: envInt("RATE_LIMIT_PER_MINUTE", 600),
     maxBodyBytes: envInt("MAX_BODY_BYTES", 1_000_000),

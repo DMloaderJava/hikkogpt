@@ -27,6 +27,10 @@ import type {
   ChatMessage,
   HealthResponse,
   HikkoModel,
+  ModelsResponse,
+  ToolCall,
+  ToolChoice,
+  ToolDefinition,
 } from "../../src/types.ts";
 
 export type {
@@ -38,6 +42,10 @@ export type {
   ChatMessage,
   HealthResponse,
   HikkoModel,
+  ModelsResponse,
+  ToolCall,
+  ToolChoice,
+  ToolDefinition,
 };
 
 export interface HikkoApiClientOptions {
@@ -125,6 +133,14 @@ export class HikkoApiClient {
   /** Кто я с точки зрения сервера + остаток лимита. */
   account(): Promise<AccountResponse> {
     return this.request<AccountResponse>("GET", "/api/v1/account");
+  }
+
+  /**
+   * Список моделей в формате OpenAI (`GET /v1/models`) — тот же эндпоинт,
+   * который дёргают Cline/Cursor/Continue при подключении «OpenAI Compatible».
+   */
+  models(): Promise<ModelsResponse> {
+    return this.request<ModelsResponse>("GET", "/v1/models");
   }
 
   /** Обычный (не потоковый) запрос: весь ответ сразу. */

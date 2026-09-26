@@ -12,11 +12,53 @@ export type HikkoModel =
   | "hikko-gpt-smart"
   | (string & {});
 
-export type ChatRole = "system" | "user" | "assistant";
+export type ChatRole = "system" | "user" | "assistant" | "tool";
+
+export interface ToolFunctionSchema {
+  type?: "object";
+  properties?: Record<string, unknown>;
+  required?: string[];
+  [key: string]: unknown;
+}
+
+export interface ToolDefinition {
+  type: "function";
+  function: {
+    name: string;
+    description?: string;
+    parameters?: ToolFunctionSchema;
+  };
+}
+
+export type ToolChoice =
+  | "none"
+  | "auto"
+  | "required"
+  | { type: "function"; function: { name: string } };
+
+export interface ToolCall {
+  id: string;
+  type: "function";
+  function: {
+    name: string;
+    /** JSON-строка аргументов (как в OpenAI). */
+    arguments: string;
+  };
+}
 
 export interface ChatMessage {
   role: ChatRole;
-  content: string;
+  /**
+   * Текст сообщения. Для `assistant` с `tool_calls` может отсутствовать,
+   * для `tool` — обязательно (это результат вызова инструмента).
+   */
+  content?: string | null;
+  /** Только для `assistant`: какие инструменты модель решила вызвать. */
+  tool_calls?: ToolCall[];
+  /** Только для `tool`: id вызова, на который отвечаем. */
+  tool_call_id?: string;
+  /** Только для `tool`: имя функции (необязательно, как в OpenAI). */
+  name?: string;
 }
 
 export interface ChatCompletionRequest {
@@ -28,18 +70,58 @@ export interface ChatCompletionRequest {
   max_tokens?: number;
   /** Дополнительный системный промпт поверх встроенного. */
   system?: string;
+  /** Инструменты (function calling) — нужны Cline, Cursor, LangChain и т.п. */
+  tools?: ToolDefinition[];
+  tool_choice?: ToolChoice;
+  top_p?: number;
+  stop?: string | string[] | null;
+  /** Поля ниже принимаются и игнорируются — OpenAI-клиенты шлют их по умолчанию. */
+  n?: number;
+  user?: string;
+  presence_penalty?: number;
+  frequency_penalty?: number;
+  logit_bias?: Record<string, number>;
+  seed?: number;
+  response_format?: { type: string; [key: string]: unknown };
+  stream_options?: { include_usage?: boolean; [key: string]: unknown };
+  parallel_tool_calls?: boolean;
+  max_completion_tokens?: number;
 }
+
+export type FinishReason = "stop" | "length" | "tool_calls" | "content_filter" | "error";
 
 export interface ChatChoice {
   index: number;
   message: ChatMessage;
-  finish_reason: "stop" | "length" | "error";
+  finish_reason: FinishReason;
 }
 
 export interface UsageInfo {
   prompt_messages: number;
   completion_chars: number;
   total_chars: number;
+  /** Токены — только если апстрим их отдал (Gemini/OpenAI-шлюз). */
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+}
+
+/**
+ * Ответ `GET /v1/models` — формат OpenAI, его ждут Cline, Cursor, Continue,
+ * LiteLLM и прочие клиенты с режимом «OpenAI Compatible».
+ */
+export interface ModelsResponse {
+  object: "list";
+  data: Array<{
+    id: string;
+    object: "model";
+    created: number;
+    owned_by: string;
+    /** Не OpenAI-поле, но клиенты его игнорируют, а нам полезно. */
+    context_window?: number;
+    supports_tools?: boolean;
+    private?: boolean;
+  }>;
 }
 
 export interface ChatCompletionResponse {
@@ -57,6 +139,14 @@ export interface ChatCompletionResponse {
   request_id: string;
 }
 
+/** Кусочек потока. `tool_calls` приходят частями — как в OpenAI. */
+export interface ChunkToolCallDelta {
+  index: number;
+  id?: string;
+  type?: "function";
+  function?: { name?: string; arguments?: string };
+}
+
 export interface ChatCompletionChunk {
   id: string;
   object: "chat.completion.chunk";
@@ -64,9 +154,11 @@ export interface ChatCompletionChunk {
   model: string;
   choices: Array<{
     index: number;
-    delta: { role?: ChatRole; content?: string };
-    finish_reason: "stop" | "length" | "error" | null;
+    delta: { role?: ChatRole; content?: string | null; tool_calls?: ChunkToolCallDelta[] };
+    finish_reason: FinishReason | null;
   }>;
+  /** Присутствует, если клиент попросил `stream_options.include_usage`. */
+  usage?: UsageInfo | null;
   request_id?: string;
 }
 

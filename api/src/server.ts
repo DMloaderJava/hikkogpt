@@ -36,6 +36,9 @@ import type {
   ChatRole,
   HealthResponse,
   IssueTokenRequest,
+  ModelsResponse,
+  ToolChoice,
+  ToolDefinition,
 } from "./types.ts";
 
 /* ------------------------------------------------------------ ошибки/утилиты */
@@ -112,7 +115,63 @@ function toHeaders(req: http.IncomingMessage): Headers {
 
 /* ------------------------------------------------------------- валидация ---- */
 
-const ROLES: ChatRole[] = ["system", "user", "assistant"];
+const ROLES: ChatRole[] = ["system", "user", "assistant", "tool"];
+
+const TOOL_CHOICE_STRINGS = new Set(["none", "auto", "required"]);
+
+function validateTools(input: unknown): ToolDefinition[] {
+  if (input === undefined) return [];
+  if (!Array.isArray(input)) throw new ApiError(400, "bad_request", "Поле tools должно быть массивом.");
+  return input.map((item, index) => {
+    if (!item || typeof item !== "object") {
+      throw new ApiError(400, "bad_request", `tools[${index}] должен быть объектом { type: "function", function: {…} }.`);
+    }
+    const tool = item as Record<string, unknown>;
+    const fn = tool.function as Record<string, unknown> | undefined;
+    if (tool.type !== "function" || !fn || typeof fn.name !== "string" || fn.name.trim() === "") {
+      throw new ApiError(400, "bad_request", `tools[${index}]: нужен type "function" и function.name.`);
+    }
+    if (fn.description !== undefined && typeof fn.description !== "string") {
+      throw new ApiError(400, "bad_request", `tools[${index}].function.description должен быть строкой.`);
+    }
+    if (fn.parameters !== undefined && (typeof fn.parameters !== "object" || fn.parameters === null)) {
+      throw new ApiError(400, "bad_request", `tools[${index}].function.parameters должен быть JSON Schema объектом.`);
+    }
+    return {
+      type: "function",
+      function: {
+        name: fn.name,
+        ...(typeof fn.description === "string" ? { description: fn.description } : {}),
+        ...(fn.parameters ? { parameters: fn.parameters as ToolDefinition["function"]["parameters"] } : {}),
+      },
+    } satisfies ToolDefinition;
+  });
+}
+
+function validateToolChoice(input: unknown): ToolChoice | undefined {
+  if (input === undefined || input === null) return undefined;
+  if (typeof input === "string") {
+    if (!TOOL_CHOICE_STRINGS.has(input)) {
+      throw new ApiError(400, "bad_request", `tool_choice должен быть одним из: ${[...TOOL_CHOICE_STRINGS].join(", ")} или объектом.`);
+    }
+    return input as ToolChoice;
+  }
+  if (typeof input === "object") {
+    const choice = input as { type?: unknown; function?: { name?: unknown } };
+    if (choice.type !== "function" || typeof choice.function?.name !== "string") {
+      throw new ApiError(400, "bad_request", 'tool_choice-объект должен быть { type: "function", function: { name } }.');
+    }
+    return { type: "function", function: { name: choice.function.name } };
+  }
+  throw new ApiError(400, "bad_request", "tool_choice должен быть строкой или объектом.");
+}
+
+function validateStop(input: unknown): string[] | undefined {
+  if (input === undefined || input === null) return undefined;
+  if (typeof input === "string") return [input];
+  if (Array.isArray(input) && input.every((item) => typeof item === "string")) return input as string[];
+  throw new ApiError(400, "bad_request", "Поле stop должно быть строкой, массивом строк или null.");
+}
 
 export function validateChatRequest(input: unknown): Required<Pick<ChatCompletionRequest, "messages">> & ChatCompletionRequest {
   if (!input || typeof input !== "object") throw new ApiError(400, "bad_request", "Тело запроса должно быть объектом.");
@@ -132,10 +191,49 @@ export function validateChatRequest(input: unknown): Required<Pick<ChatCompletio
       throw new ApiError(400, "bad_request", `messages[${index}].role должен быть одним из: ${ROLES.join(", ")}.`);
     }
     const content = message.content;
-    if (typeof content !== "string" || content.trim() === "") {
+    const hasText = typeof content === "string" && content.trim() !== "";
+    const toolCalls = message.tool_calls;
+
+    // assistant c tool_calls имеет право быть без текста — это норма для OpenAI.
+    if (role === "assistant" && Array.isArray(toolCalls) && toolCalls.length > 0) {
+      const calls = toolCalls.map((call, callIndex) => {
+        const item2 = call as Record<string, unknown> | null;
+        const fn = item2?.function as Record<string, unknown> | undefined;
+        if (!item2 || typeof fn?.name !== "string") {
+          throw new ApiError(400, "bad_request", `messages[${index}].tool_calls[${callIndex}]: нужна function.name.`);
+        }
+        return {
+          id: typeof item2.id === "string" ? item2.id : `call_${index}_${callIndex}`,
+          type: "function" as const,
+          function: {
+            name: fn.name,
+            arguments: typeof fn.arguments === "string" ? fn.arguments : JSON.stringify(fn.arguments ?? {}),
+          },
+        };
+      });
+      return {
+        role: "assistant" as const,
+        ...(hasText ? { content: content as string } : {}),
+        tool_calls: calls,
+      } satisfies ChatMessage;
+    }
+
+    if (role === "tool") {
+      if (typeof message.tool_call_id !== "string" || message.tool_call_id === "") {
+        throw new ApiError(400, "bad_request", `messages[${index}]: для роли tool обязателен tool_call_id.`);
+      }
+      return {
+        role: "tool" as const,
+        content: typeof content === "string" ? content : JSON.stringify(content ?? ""),
+        tool_call_id: message.tool_call_id,
+        ...(typeof message.name === "string" ? { name: message.name } : {}),
+      } satisfies ChatMessage;
+    }
+
+    if (!hasText) {
       throw new ApiError(400, "bad_request", `messages[${index}].content должен быть непустой строкой.`);
     }
-    return { role: role as ChatRole, content };
+    return { role: role as ChatRole, content: content as string };
   });
 
   if (body.model !== undefined && typeof body.model !== "string") {
@@ -159,6 +257,16 @@ export function validateChatRequest(input: unknown): Required<Pick<ChatCompletio
   if (body.system !== undefined && typeof body.system !== "string") {
     throw new ApiError(400, "bad_request", "Поле system должно быть строкой.");
   }
+  if (body.top_p !== undefined) {
+    const topP = Number(body.top_p);
+    if (!Number.isFinite(topP) || topP < 0 || topP > 1) {
+      throw new ApiError(400, "bad_request", "top_p должен быть числом в диапазоне 0…1.");
+    }
+  }
+
+  const tools = validateTools(body.tools);
+  const toolChoice = validateToolChoice(body.tool_choice);
+  const stop = validateStop(body.stop);
 
   return {
     messages,
@@ -167,10 +275,47 @@ export function validateChatRequest(input: unknown): Required<Pick<ChatCompletio
     ...(body.temperature !== undefined ? { temperature: Number(body.temperature) } : {}),
     ...(body.max_tokens !== undefined ? { max_tokens: Number(body.max_tokens) } : {}),
     ...(typeof body.system === "string" ? { system: body.system } : {}),
+    ...(tools.length > 0 ? { tools } : {}),
+    ...(toolChoice !== undefined ? { tool_choice: toolChoice } : {}),
+    ...(body.top_p !== undefined ? { top_p: Number(body.top_p) } : {}),
+    ...(stop !== undefined ? { stop } : {}),
+    // n, user, seed, logit_bias, response_format, stream_options, parallel_tool_calls
+    // принимаются, но не влияют на ответ — OpenAI-клиенты шлют их по умолчанию.
   };
 }
 
 /* ----------------------------------------------------------------- роутер ---- */
+
+/**
+ * OpenAI-клиенты по-разному понимают «базовый URL», поэтому один и тот же
+ * эндпоинт доступен по трём вариантам пути:
+ *
+ * | Базовый URL в клиенте | Путь запроса |
+ * |---|---|
+ * | `http://host:8787`          | `/v1/chat/completions`, `/v1/models` |
+ * | `http://host:8787/v1`       | `/chat/completions`, `/models` |
+ * | `http://host:8787/api/v1`   | `/chat/completions`, `/models` |
+ */
+const ROUTE_ALIASES: Record<string, string> = {
+  "/v1/chat/completions": "/api/v1/chat/completions",
+  "/chat/completions": "/api/v1/chat/completions",
+  "/v1/completions": "/api/v1/chat/completions",
+  "/completions": "/api/v1/chat/completions",
+  "/v1/models": "/api/v1/models",
+  "/models": "/api/v1/models",
+  "/v1/account": "/api/v1/account",
+  "/account": "/api/v1/account",
+  "/health": "/api/v1/health",
+};
+
+const KNOWN_ROUTES = new Set([
+  "/",
+  "/api/v1/health",
+  "/api/v1/account",
+  "/api/v1/chat/completions",
+  "/api/v1/models",
+  "/api/v1/admin/token",
+]);
 
 export interface ServerDeps {
   config: ApiConfig;
@@ -179,16 +324,57 @@ export interface ServerDeps {
 }
 
 function buildUpstreamRequest(request: ChatCompletionRequest, config: ApiConfig, requestId: string): UpstreamRequest {
-  const system = [config.systemPrompt, request.system ?? ""].filter(Boolean).join("\n\n");
+  // Если клиент (Cline, Cursor, LangChain…) прислал свой системный промпт —
+  // он важнее встроенного: не подмешиваем «характер» hikkoGPT поверх инструкций агента.
+  const hasClientSystem =
+    typeof request.system === "string" || request.messages.some((message) => message.role === "system");
+  const system = [hasClientSystem ? "" : config.systemPrompt, request.system ?? ""].filter(Boolean).join("\n\n");
+
+  const requested = request.model ?? config.defaultModel;
+  const model = isKnownModel(requested, config) ? requested : config.defaultModel;
+  const stop = normalizeStop(request.stop);
+
   return {
-    messages: [{ role: "system", content: system }, ...request.messages.filter((message) => message.role !== "system")],
-    model: request.model ?? config.defaultModel,
-    system,
+    messages: request.messages,
+    model,
+    ...(system ? { system } : {}),
     ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+    ...(request.top_p !== undefined ? { topP: request.top_p } : {}),
     ...(request.max_tokens !== undefined ? { maxTokens: request.max_tokens } : {}),
+    ...(stop ? { stop } : {}),
+    ...(request.tools && request.tools.length > 0 ? { tools: request.tools } : {}),
+    ...(request.tool_choice !== undefined ? { toolChoice: request.tool_choice } : {}),
     requestId,
     timeoutMs: config.requestTimeoutMs,
   };
+}
+
+/** `stop` приходит строкой, массивом или null — апстриму нужен массив. */
+function normalizeStop(stop: string | string[] | null | undefined): string[] | undefined {
+  if (!stop) return undefined;
+  const list = Array.isArray(stop) ? stop : [stop];
+  return list.length > 0 ? list : undefined;
+}
+
+/** Знаком ли серверу id модели (псевдонимы hikko-* или любое имя gemini-*). */
+export function isKnownModel(model: string, config: ApiConfig): boolean {
+  const normalized = model.trim().toLowerCase();
+  if (config.models.some((known) => known.toLowerCase() === normalized)) return true;
+  return normalized.startsWith("gemini");
+}
+
+/**
+ * Незнакомая модель: по умолчанию молча берём дефолтную (клиент вроде Cline
+ * вводит id руками), при `ALLOW_UNKNOWN_MODEL=false` — честная ошибка 400.
+ */
+function assertModelAllowed(request: ChatCompletionRequest, config: ApiConfig): void {
+  if (!request.model) return;
+  if (config.allowUnknownModel || isKnownModel(request.model, config)) return;
+  throw new ApiError(
+    400,
+    "bad_request",
+    `Модель "${request.model}" неизвестна. Доступны: ${config.models.join(", ")} (и gemini-*).`,
+  );
 }
 
 function healthPayload(config: ApiConfig): HealthResponse {
@@ -201,6 +387,23 @@ function healthPayload(config: ApiConfig): HealthResponse {
     models: config.models,
     streaming: true,
     time: new Date().toISOString(),
+  };
+}
+
+/** `GET /v1/models` — список моделей в формате OpenAI (его ждут Cline/Cursor/Continue). */
+function modelsPayload(config: ApiConfig): ModelsResponse {
+  const created = Math.floor(Date.now() / 1000);
+  return {
+    object: "list",
+    data: config.models.map((id) => ({
+      id,
+      object: "model" as const,
+      created,
+      owned_by: "hikkogpt",
+      context_window: 1_000_000,
+      supports_tools: true,
+      private: true,
+    })),
   };
 }
 
@@ -237,6 +440,7 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse, d
   }
 
   const request = validateChatRequest(await readBody(req, deps.config.maxBodyBytes));
+  assertModelAllowed(request, deps.config);
   const upstreamRequest = buildUpstreamRequest(request, deps.config, requestId);
   const model = upstreamRequest.model;
 
@@ -269,16 +473,28 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse, d
   }
 
   const result = await deps.provider.complete(upstreamRequest);
+  const assistantMessage: ChatMessage = {
+    role: "assistant",
+    content: result.text,
+    ...(result.toolCalls.length > 0 ? { tool_calls: result.toolCalls } : {}),
+  };
+  const promptChars = request.messages.reduce(
+    (sum, message) => sum + (typeof message.content === "string" ? message.content.length : 0),
+    0,
+  );
   const response: ChatCompletionResponse = {
     id: requestId,
     object: "chat.completion",
     created: Math.floor(Date.now() / 1000),
     model: result.model || model,
-    choices: [{ index: 0, message: { role: "assistant", content: result.text }, finish_reason: result.finishReason }],
+    choices: [{ index: 0, message: assistantMessage, finish_reason: result.finishReason }],
     usage: {
       prompt_messages: request.messages.length,
       completion_chars: result.text.length,
-      total_chars: request.messages.reduce((sum, message) => sum + message.content.length, 0) + result.text.length,
+      total_chars: promptChars + result.text.length,
+      ...(result.usage?.promptTokens !== undefined ? { prompt_tokens: result.usage.promptTokens } : {}),
+      ...(result.usage?.completionTokens !== undefined ? { completion_tokens: result.usage.completionTokens } : {}),
+      ...(result.usage?.totalTokens !== undefined ? { total_tokens: result.usage.totalTokens } : {}),
     },
     provider: result.provider,
     account: { email: identity.email },
@@ -345,7 +561,8 @@ export async function routeRequest(req: http.IncomingMessage, res: http.ServerRe
   const requestId = (toHeaders(req).get("x-request-id") ?? crypto.randomUUID()).slice(0, 64);
   const method = (req.method ?? "GET").toUpperCase();
   const url = new URL(req.url ?? "/", "http://internal");
-  const route = url.pathname.replace(/\/+$/, "") || "/";
+  const rawRoute = url.pathname.replace(/\/+$/, "") || "/";
+  const route = ROUTE_ALIASES[rawRoute] ?? rawRoute;
 
   if (method === "OPTIONS") {
     res.writeHead(204, CORS_HEADERS);
@@ -367,6 +584,12 @@ export async function routeRequest(req: http.IncomingMessage, res: http.ServerRe
       json(res, 200, accountPayload(identity.email, identity.method, identity.keyKind, deps, requestId), requestId);
       return;
     }
+    if (route === "/api/v1/models" && (method === "GET" || method === "HEAD")) {
+      // Список моделей — за ключом: адрес из белого списка видно только своим.
+      await authenticate({ headers: toHeaders(req), config: deps.config });
+      json(res, 200, modelsPayload(deps.config), requestId);
+      return;
+    }
     if (route === "/api/v1/chat/completions" && method === "POST") {
       await handleChat(req, res, deps, requestId);
       return;
@@ -376,9 +599,15 @@ export async function routeRequest(req: http.IncomingMessage, res: http.ServerRe
       return;
     }
 
-    const allowed = route === "/api/v1/health" || route === "/api/v1/account" || route === "/api/v1/chat/completions" || route === "/api/v1/admin/token" || route === "/";
-    if (!allowed) {
-      fail(res, requestId, 404, "not_found", `Маршрут ${route} не найден. Список: GET /api/v1/health, GET /api/v1/account, POST /api/v1/chat/completions.`, deps.config);
+    if (!KNOWN_ROUTES.has(route)) {
+      fail(
+        res,
+        requestId,
+        404,
+        "not_found",
+        `Маршрут ${rawRoute} не найден. OpenAI-совместимые: GET /v1/models, POST /v1/chat/completions (то же самое доступно как /api/v1/…).`,
+        deps.config,
+      );
       return;
     }
     fail(res, requestId, 405, "method_not_allowed", `Метод ${method} не поддерживается маршрутом ${route}.`, deps.config);
@@ -431,7 +660,10 @@ if (isMain()) {
     for (const email of config.allowlist) {
       console.log(`  ➜  ключ для ${email}: ${apiKeyForEmail(email, config.secret, config.staticApiKey)}`);
     }
-    console.log(`  ➜  песочница: http://${shown}:${config.port}/\n`);
+    console.log(`  ➜  песочница: http://${shown}:${config.port}/`);
+    console.log("  ➜  OpenAI Compatible (Cline, Cursor, Continue, LangChain):");
+    console.log(`       Base URL: http://${shown}:${config.port}/v1   (ключ — тот же, что выше)`);
+    console.log(`       Model ID: ${config.defaultModel}\n`);
   });
 
   const shutdown = (signal: string) => {
