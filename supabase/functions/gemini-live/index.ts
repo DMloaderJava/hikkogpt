@@ -8,6 +8,13 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.58.0";
 
 /**
+ * Глобал Supabase Edge Runtime: `waitUntil` откладывает увольнение воркера,
+ * пока переданный промис не разрешится. `declare` нужен, чтобы файл
+ * компилировался и вне Edge Runtime — там вызов просто пропускается проверкой `typeof`.
+ */
+declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void } | undefined;
+
+/**
  * Модели для ротации «модель × ключ». Держите в согласии с DEFAULT_LIVE_MODEL и
  * DEFAULT_LIVE_MODEL_FALLBACKS в src/types/gemini-live.ts.
  *
@@ -77,6 +84,21 @@ Deno.serve(async (req) => {
   if (keys.length === 0) return new Response("Voice mode is not configured", { status: 503 });
 
   const { socket: client, response } = Deno.upgradeWebSocket(req);
+
+  // Supabase считает HTTP-запрос завершённым сразу после upgrade: без
+  // незавершённого waitUntil-промиса супервизор видит «простаивающий» воркер и
+  // увольняет его (EarlyDrop) — соединение обрывается сразу после открытия,
+  // браузер пишет в консоль «Close received after close», а UI показывает
+  // «Сессия не поднялась» / «Ошибка соединения с голосовым сервисом».
+  // Держим воркер живым ровно до закрытия клиентского сокета — официальный
+  // рецепт Supabase для WebSocket:
+  // https://supabase.com/docs/guides/functions/websockets
+  const clientClosed = new Promise<void>((resolve) => {
+    client.addEventListener("close", () => resolve(), { once: true });
+  });
+  if (typeof EdgeRuntime !== "undefined" && EdgeRuntime) {
+    EdgeRuntime.waitUntil(clientClosed);
+  }
 
   let upstream: WebSocket | null = null;
   /** Сессия считалась рабочей: setupComplete дошёл до клиента. */
