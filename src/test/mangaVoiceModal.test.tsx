@@ -161,36 +161,89 @@ describe("MangaVoiceModal: анализ", () => {
     expect(screen.getByTestId("manga-analyze").textContent).toContain("Все страницы обработаны");
   });
 
-  it("за один запрос уходит не больше 5 страниц", async () => {
+  it("одно нажатие разбирает все страницы, но в запросе не больше 5", async () => {
     open();
     setInputFiles(
       screen.getByTestId("manga-file-input"),
       Array.from({ length: 7 }, (_, i) => pngFile(`p${i + 1}.png`))
     );
 
-    fetchImpl = async () =>
-      jsonResponse({
-        pages: Array.from({ length: ANALYZE_BATCH_SIZE }, (_, i) => ({
-          description: `Кадр ${i + 1}`,
+    let batch = 0;
+    fetchImpl = async () => {
+      batch += 1;
+      return jsonResponse({
+        pages: Array.from({ length: batch === 1 ? ANALYZE_BATCH_SIZE : 2 }, (_, i) => ({
+          description: `Кадр ${batch}.${i + 1}`,
           transcript: "Speaker 1: текст",
         })),
       });
+    };
 
     await act(async () => {
       fireEvent.click(screen.getByTestId("manga-analyze"));
     });
-    await waitFor(() => expect(screen.getByText("Кадр 1")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Кадр 2.2")).toBeTruthy());
 
-    const first = calls.filter((c) => c.url.endsWith("/manga-analyze"));
-    expect(first).toHaveLength(1);
-    expect(first[0].body.images).toHaveLength(ANALYZE_BATCH_SIZE);
+    const analyzeCalls = calls.filter((c) => c.url.endsWith("/manga-analyze"));
+    expect(analyzeCalls).toHaveLength(2);
+    expect(analyzeCalls[0].body.images).toHaveLength(ANALYZE_BATCH_SIZE);
+    expect(analyzeCalls[1].body.images).toHaveLength(2);
 
-    // вторая порция — оставшиеся страницы
+    expect(screen.getByText("Кадр 1.1")).toBeTruthy();
+    expect(screen.getByTestId("manga-analyze").textContent).toContain("Все страницы обработаны");
+  });
+
+  it("«Стоп» прерывает анализ: запрос отменён, страницы снова готовы к отправке", async () => {
+    open();
+    setInputFiles(screen.getByTestId("manga-file-input"), [pngFile("p1.png")]);
+
+    let signal: AbortSignal | undefined;
+    fetchImpl = async (_url, init) => {
+      signal = init.signal ?? undefined;
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+      });
+    };
+
+    fireEvent.click(screen.getByTestId("manga-analyze"));
+    await waitFor(() => expect(screen.getByTestId("manga-stop")).toBeTruthy());
+    // Ждём сам запрос: кнопка «Стоп» появляется раньше, чем страница сжата и отправлена.
+    await waitFor(() => expect(signal).toBeTruthy());
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("manga-stop"));
+    });
+
+    expect(signal?.aborted).toBe(true);
+    // Отмена — не ошибка: ни плашки, ни toast, страница снова в очереди.
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByTestId("manga-stop")).toBeNull();
+    expect(screen.getByTestId("manga-analyze").hasAttribute("disabled")).toBe(false);
+    expect(screen.getByTestId("manga-analyze").textContent).toContain("1–1");
+  });
+
+  it("упавший батч не мешает отправить страницы снова", async () => {
+    open();
+    setInputFiles(screen.getByTestId("manga-file-input"), [pngFile("p1.png")]);
+
+    let attempt = 0;
+    fetchImpl = async () => {
+      attempt += 1;
+      return attempt === 1
+        ? jsonResponse({ error: "Сервис анализа недоступен" }, 502)
+        : jsonResponse({ pages: [{ description: "Со второго раза", transcript: "Speaker 1: да" }] });
+    };
+
     await act(async () => {
       fireEvent.click(screen.getByTestId("manga-analyze"));
     });
-    await waitFor(() => expect(screen.getByText("Кадр 1", { selector: "p" })).toBeTruthy());
-    expect(calls.filter((c) => c.url.endsWith("/manga-analyze"))[1].body.images).toHaveLength(2);
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Сервис анализа недоступен"));
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("manga-analyze"));
+    });
+    await waitFor(() => expect(screen.getByText("Со второго раза")).toBeTruthy());
+    expect(calls.filter((c) => c.url.endsWith("/manga-analyze"))).toHaveLength(2);
   });
 
   it("ошибка анализа показывается текстом сервера, страницы остаются доступными", async () => {
@@ -366,5 +419,97 @@ describe("MangaVoiceModal: озвучка", () => {
 
     await waitFor(() => expect(calls.filter((c) => c.url.endsWith("/dialog-tts"))).toHaveLength(2));
     expect(document.querySelectorAll("audio")).toHaveLength(2);
+  });
+
+  it("сбой одной страницы не останавливает «Озвучить всё», причина видна на кадре", async () => {
+    open();
+    setInputFiles(screen.getByTestId("manga-file-input"), [pngFile("p1.png"), pngFile("p2.png")]);
+    fetchImpl = async (url) =>
+      url.endsWith("/manga-analyze")
+        ? jsonResponse({
+            pages: [
+              { description: "Кадр 1", transcript: "Speaker 1: раз" },
+              { description: "Кадр 2", transcript: "Speaker 1: два" },
+            ],
+          })
+        : audioResponse();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("manga-analyze"));
+    });
+    await waitFor(() => expect(screen.getByTestId("manga-speak-all")).toBeTruthy());
+
+    let ttsCalls = 0;
+    fetchImpl = async (url) => {
+      if (!url.endsWith("/dialog-tts")) return jsonResponse({});
+      ttsCalls += 1;
+      return ttsCalls === 1
+        ? jsonResponse({ error: "Слишком много запросов, попробуйте чуть позже." }, 429)
+        : audioResponse();
+    };
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("manga-speak-all"));
+    });
+
+    await waitFor(() => expect(ttsCalls).toBe(2));
+    // Вторая страница озвучена, первая помечена причиной отказа.
+    expect(document.querySelectorAll("audio")).toHaveLength(1);
+    expect(screen.getByTestId("manga-voice-error-1").textContent).toContain("Слишком много запросов");
+    expect(screen.getByRole("alert").textContent).toContain("Не озвучена страница 1");
+  });
+
+  it("«Стоп» прерывает озвучку кадра без сообщения об ошибке", async () => {
+    await withAnalyzedPage();
+
+    let signal: AbortSignal | undefined;
+    fetchImpl = async (url, init) => {
+      if (!url.endsWith("/dialog-tts")) return jsonResponse({});
+      signal = init.signal ?? undefined;
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+      });
+    };
+
+    fireEvent.click(screen.getByTestId("manga-speak-1"));
+    await waitFor(() => expect(screen.getByTestId("manga-stop-1")).toBeTruthy());
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("manga-stop-1"));
+    });
+
+    expect(signal?.aborted).toBe(true);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByTestId("manga-stop-1")).toBeNull();
+    expect(screen.getByTestId("manga-speak-1").hasAttribute("disabled")).toBe(false);
+  });
+
+  it("при закрытии окна страницы и озвучка сохраняются, но сами не стартуют", async () => {
+    const onClose = vi.fn();
+    const view = render(<MangaVoiceModal open onClose={onClose} />);
+    setInputFiles(screen.getByTestId("manga-file-input"), [pngFile("p1.png")]);
+    fetchImpl = async (url) =>
+      url.endsWith("/manga-analyze")
+        ? jsonResponse({ pages: [{ description: "Кадр", transcript: "Speaker 1: Привет" }] })
+        : audioResponse();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("manga-analyze"));
+    });
+    await waitFor(() => expect(screen.getByTestId("manga-speak-1")).toBeTruthy());
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("manga-speak-1"));
+    });
+    await waitFor(() => expect(document.querySelector("audio")).toBeTruthy());
+    expect(document.querySelector("audio")!.hasAttribute("autoplay")).toBe(true);
+
+    view.rerender(<MangaVoiceModal open={false} onClose={onClose} />);
+    expect(screen.queryByTestId("manga-modal")).toBeNull();
+
+    view.rerender(<MangaVoiceModal open onClose={onClose} />);
+    // Результат работы на месте, автозапуска нет.
+    expect(screen.getByTestId("manga-page-1")).toBeTruthy();
+    expect(screen.getByTestId("manga-speak-1").textContent).toContain("Переозвучить");
+    expect(document.querySelector("audio")!.hasAttribute("autoplay")).toBe(false);
   });
 });

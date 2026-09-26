@@ -1,84 +1,55 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BookOpen, Loader2, Trash2, Volume2, X } from "lucide-react";
+/**
+ * Окно «Озвучиватель манги».
+ *
+ * Вся работа с запросами и состоянием страниц живёт в `useMangaVoice` — хук
+ * построен по образцу `useChat` (отправка сообщения): единые заголовки и
+ * обработка ошибок, `AbortController` с кнопкой «Стоп», понятные причины отказа
+ * в плашке и в toast. Компонент здесь отвечает только за представление.
+ */
+
+import { useEffect } from "react";
+import { BookOpen, Loader2, Square, Trash2, Volume2, X } from "lucide-react";
 import { AudioPlayer } from "@/components/AudioPlayer";
-import { getEdgeAuthHeaders } from "@/lib/edgeAuth";
-import { announceStopSpeech } from "@/lib/speechEvents";
-import {
-  ACCEPTED_PAGE_ACCEPT,
-  ANALYZE_BATCH_SIZE,
-  filterPageFiles,
-  formatRejections,
-  toPageDataURL,
-} from "@/lib/mangaPages";
-import {
-  MAX_TTS_SPEAKERS,
-  TTS_VOICES,
-  defaultVoiceFor,
-  planTranscript,
-} from "@/lib/mangaTranscript";
-import type { TtsVoice } from "@/lib/mangaTranscript";
-
-const endpoint = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
-
-type PageStatus = "new" | "analyzing" | "ready";
-
-interface Page {
-  id: string;
-  file: File;
-  /** Превью страницы (object URL). Отзывается при удалении страницы и на unmount. */
-  url: string;
-  status: PageStatus;
-  description?: string;
-  transcript?: string;
-  /** Готовая озвучка кадра (object URL). */
-  audio?: string;
-}
+import { useMangaVoice } from "@/hooks/useMangaVoice";
+import { ACCEPTED_PAGE_ACCEPT, ANALYZE_BATCH_SIZE } from "@/lib/mangaPages";
+import { MAX_TTS_SPEAKERS, TTS_VOICES, planTranscript, type TtsVoice } from "@/lib/mangaTranscript";
 
 interface MangaVoiceModalProps {
   open: boolean;
   onClose: () => void;
 }
 
-let pageSeq = 0;
-const nextPageId = () => `manga-page-${Date.now().toString(36)}-${(pageSeq += 1)}`;
-
-function releasePage(page: Pick<Page, "url" | "audio">) {
-  try {
-    URL.revokeObjectURL(page.url);
-    if (page.audio) URL.revokeObjectURL(page.audio);
-  } catch {
-    // URL уже отозван — не критично
-  }
-}
-
 export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
-  const [pages, setPages] = useState<Page[]>([]);
-  const [analyzing, setAnalyzing] = useState(false);
-  const [speakingId, setSpeakingId] = useState<string | null>(null);
-  const [error, setError] = useState("");
-  const [voices, setVoices] = useState<Record<string, TtsVoice>>(() =>
-    Object.fromEntries(TTS_VOICES.map((voice, i) => [String(i + 1), voice])) as Record<string, TtsVoice>
-  );
-  /** id страницы + url озвучки, которую запустили только что. Сбрасывается при закрытии. */
-  const [autoPlayKey, setAutoPlayKey] = useState<string | null>(null);
+  const {
+    pages,
+    voices,
+    chapter,
+    readyPages,
+    pendingCount,
+    isAnalyzing,
+    analyzeProgress,
+    speakingId,
+    isRequesting,
+    error,
+    autoPlayKey,
+    addFiles,
+    removePage,
+    setTranscript,
+    setVoice,
+    analyzePages,
+    speakPage,
+    speakAll,
+    stop,
+  } = useMangaVoice();
 
-  const pagesRef = useRef(pages);
-  pagesRef.current = pages;
-
-  useEffect(
-    () => () => {
-      pagesRef.current.forEach(releasePage);
-    },
-    []
-  );
-
-  // При закрытии останавливаем звук и гасим автозапуск: иначе при повторном
-  // открытии все озвученные страницы стартуют одновременно.
+  // Закрытие окна останавливает запросы и глушит звук: ничего не должно
+  // озвучиваться «в пустоту» (тот же принцип, что и stopStreaming в чате).
+  // Страницы и уже готовая озвучка сохраняются в хуке — при повторном открытии
+  // окно показывает прежний результат, а не пустой список.
   useEffect(() => {
     if (open) return;
-    announceStopSpeech();
-    setAutoPlayKey(null);
-  }, [open]);
+    stop();
+  }, [open, stop]);
 
   useEffect(() => {
     if (!open) return;
@@ -89,159 +60,25 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
-  /** Все персонажи, которые встречаются в транскриптах главы. */
-  const chapter = useMemo(() => {
-    const speakers = new Set<number>();
-    const names: Record<number, string> = {};
-    for (const page of pages) {
-      if (page.status !== "ready") continue;
-      const plan = planTranscript(page.transcript ?? "");
-      plan.speakers.forEach((s) => speakers.add(s));
-      Object.entries(plan.names).forEach(([s, name]) => {
-        names[Number(s)] = name;
-      });
-    }
-    return { speakers: [...speakers].sort((a, b) => a - b).slice(0, MAX_TTS_SPEAKERS), names };
-  }, [pages]);
-
-  const readyPages = useMemo(() => pages.filter((p) => p.status === "ready"), [pages]);
-  const pendingCount = useMemo(() => pages.filter((p) => p.status !== "ready").length, [pages]);
-
-  const addFiles = useCallback((list: FileList | null) => {
-    const { accepted, rejected } = filterPageFiles(list);
-    const rejectionNote = formatRejections(rejected);
-    if (accepted.length) {
-      setPages((prev) => [
-        ...prev,
-        ...accepted.map((file) => ({ id: nextPageId(), file, url: URL.createObjectURL(file), status: "new" as const })),
-      ]);
-    }
-    setError(rejectionNote);
-  }, []);
-
-  const removePage = useCallback((id: string) => {
-    setPages((prev) => {
-      const target = prev.find((p) => p.id === id);
-      if (target) releasePage(target);
-      return prev.filter((p) => p.id !== id);
-    });
-  }, []);
-
-  const post = useCallback(async (path: string, body: unknown) => {
-    const res = await fetch(`${endpoint}/${path}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...(await getEdgeAuthHeaders()) },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      const info = await res.json().catch(() => ({}));
-      throw new Error(info?.error || `Ошибка ${res.status}`);
-    }
-    return res;
-  }, []);
-
-  const analyze = useCallback(async () => {
-    const batch = pagesRef.current.filter((p) => p.status !== "ready").slice(0, ANALYZE_BATCH_SIZE);
-    if (!batch.length || analyzing) return;
-
-    const batchIds = new Set(batch.map((p) => p.id));
-    setAnalyzing(true);
-    setError("");
-    setPages((prev) => prev.map((p) => (batchIds.has(p.id) ? { ...p, status: "analyzing" } : p)));
-
-    try {
-      // Страницы уменьшаются до 1600 px и пережимаются: батч из 5 сканов по 10 МБ
-      // в base64 — это десятки мегабайт в одном запросе, он не проходит по лимитам.
-      const images = await Promise.all(batch.map((p) => toPageDataURL(p.file)));
-      const res = await post("manga-analyze", { images });
-      const data = await res.json();
-      const result: { description?: string; transcript?: string }[] = Array.isArray(data?.pages) ? data.pages : [];
-
-      setPages((prev) =>
-        prev.map((p) => {
-          const index = batch.findIndex((b) => b.id === p.id);
-          if (index < 0) return p;
-          const item = result[index];
-          if (!item) return { ...p, status: "new" };
-          return {
-            ...p,
-            status: "ready",
-            description: item.description ?? "",
-            transcript: item.transcript ?? "",
-          };
-        })
-      );
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Ошибка анализа");
-      setPages((prev) => prev.map((p) => (batchIds.has(p.id) && p.status === "analyzing" ? { ...p, status: "new" } : p)));
-    } finally {
-      setAnalyzing(false);
-    }
-  }, [analyzing, post]);
-
-  const synthesize = useCallback(
-    async (page: Page) => {
-      const plan = planTranscript(page.transcript ?? "");
-      if (plan.problems.length) {
-        setError(plan.problems[0]);
-        return false;
-      }
-
-      const res = await post("dialog-tts", { transcript: plan.text, voices });
-      const url = URL.createObjectURL(await res.blob());
-      setPages((prev) =>
-        prev.map((p) => {
-          if (p.id !== page.id) return p;
-          if (p.audio && p.audio !== url) URL.revokeObjectURL(p.audio);
-          return { ...p, audio: url };
-        })
-      );
-      setAutoPlayKey(`${page.id}:${url}`);
-      return true;
-    },
-    [post, voices]
-  );
-
-  const speak = useCallback(
-    async (page: Page) => {
-      setSpeakingId(page.id);
-      setError("");
-      announceStopSpeech();
-      try {
-        await synthesize(page);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Ошибка озвучки");
-      } finally {
-        setSpeakingId(null);
-      }
-    },
-    [synthesize]
-  );
-
-  const speakAll = useCallback(async () => {
-    const queue = pagesRef.current.filter((p) => p.status === "ready" && (p.transcript ?? "").trim());
-    if (!queue.length) return;
-    setError("");
-    announceStopSpeech();
-    for (const page of queue) {
-      setSpeakingId(page.id);
-      try {
-        await synthesize(page);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Ошибка озвучки");
-        break;
-      }
-    }
-    setSpeakingId(null);
-  }, [synthesize]);
-
   if (!open) return null;
 
-  const analyzeLabel = analyzing
-    ? "Анализирую…"
-    : pendingCount
-      ? `Анализировать страницы ${pages.length - pendingCount + 1}–${Math.min(pages.length - pendingCount + ANALYZE_BATCH_SIZE, pages.length)}`
-      : "Все страницы обработаны";
+  const analyzeLabel = (() => {
+    if (isAnalyzing) {
+      if (!analyzeProgress) return "Анализирую…";
+      const from = analyzeProgress.done + 1;
+      const to = Math.min(analyzeProgress.done + ANALYZE_BATCH_SIZE, analyzeProgress.total);
+      const suffix = analyzeProgress.batches > 1 ? ` из ${analyzeProgress.total}` : "";
+      return `Анализирую страницы ${from}–${to}${suffix}…`;
+    }
+    if (!pages.length) return "Анализировать страницы";
+    if (!pendingCount) return "Все страницы обработаны";
+    const from = pages.length - pendingCount + 1;
+    const to = pages.length;
+    const batches = Math.ceil(pendingCount / ANALYZE_BATCH_SIZE);
+    return batches > 1
+      ? `Анализировать страницы ${from}–${to} (по ${ANALYZE_BATCH_SIZE} за запрос)`
+      : `Анализировать страницы ${from}–${to}`;
+  })();
 
   return (
     <div
@@ -269,8 +106,8 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
         </div>
 
         <p className="mb-2 text-xs text-muted-foreground">
-          Загрузите страницы по порядку. Анализируем по {ANALYZE_BATCH_SIZE} изображений, затем добавляйте следующие.
-          Каждая страница получит описание, реплики и отдельную озвучку.
+          Загрузите страницы по порядку — они разбираются батчами по {ANALYZE_BATCH_SIZE} изображений
+          за одно нажатие. Каждая страница получит описание, реплики и отдельную озвучку.
         </p>
 
         <input
@@ -290,25 +127,45 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
           <div className="my-3 flex flex-wrap items-center gap-2">
             <button
               data-testid="manga-analyze"
-              disabled={analyzing || pendingCount === 0}
-              onClick={analyze}
+              disabled={isAnalyzing || pendingCount === 0}
+              onClick={() => void analyzePages()}
               className="flex items-center gap-2 rounded-lg bg-interactive px-4 py-2 text-sm text-interactive-foreground transition-all disabled:opacity-50"
             >
-              {analyzing && <Loader2 className="h-4 w-4 animate-spin" />}
+              {isAnalyzing && <Loader2 className="h-4 w-4 animate-spin" />}
               {analyzeLabel}
             </button>
+
             {readyPages.length > 0 && (
               <button
                 data-testid="manga-speak-all"
-                disabled={speakingId !== null}
-                onClick={speakAll}
+                disabled={isRequesting}
+                onClick={() => void speakAll()}
                 className="flex items-center gap-2 rounded-lg bg-interactive/10 px-4 py-2 text-sm text-interactive transition-all disabled:opacity-50"
               >
                 {speakingId !== null ? <Loader2 className="h-4 w-4 animate-spin" /> : <Volume2 className="h-4 w-4" />}
                 Озвучить всё
               </button>
             )}
+
+            {isRequesting && (
+              <button
+                data-testid="manga-stop"
+                onClick={stop}
+                aria-label="Остановить"
+                className="flex items-center gap-2 rounded-lg bg-destructive/10 px-4 py-2 text-sm text-destructive transition-all hover:bg-destructive/20"
+              >
+                <Square className="h-3.5 w-3.5" fill="currentColor" />
+                Стоп
+              </button>
+            )}
           </div>
+        )}
+
+        {isAnalyzing && analyzeProgress && analyzeProgress.batches > 1 && (
+          <p className="mb-3 text-[11px] text-muted-foreground">
+            Батч {analyzeProgress.batch} из {analyzeProgress.batches} · обработано {analyzeProgress.done} из{" "}
+            {analyzeProgress.total} страниц
+          </p>
         )}
 
         {error && (
@@ -327,10 +184,8 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
                   <select
                     data-testid={`manga-voice-${speaker}`}
                     aria-label={`Голос персонажа ${speaker}`}
-                    value={voices[String(speaker)] ?? defaultVoiceFor(speaker)}
-                    onChange={(e) =>
-                      setVoices((prev) => ({ ...prev, [String(speaker)]: e.target.value as TtsVoice }))
-                    }
+                    value={voices[String(speaker)] ?? TTS_VOICES[(speaker - 1) % TTS_VOICES.length]}
+                    onChange={(e) => setVoice(speaker, e.target.value as TtsVoice)}
                     className="mt-1 w-full rounded-lg border border-border bg-secondary/50 px-2 py-2 text-sm text-foreground focus:border-interactive/40 focus:outline-none transition-all"
                   >
                     {TTS_VOICES.map((voice) => (
@@ -342,6 +197,11 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
                 </label>
               ))}
             </div>
+            {chapter.speakers.length >= MAX_TTS_SPEAKERS && (
+              <p className="mt-2 text-[11px] text-muted-foreground">
+                Персонажей больше, чем голосов: часть из них делит голос с последним.
+              </p>
+            )}
           </div>
         )}
 
@@ -383,11 +243,7 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
                       aria-label={`Реплики страницы ${i + 1}`}
                       value={page.transcript ?? ""}
                       placeholder={"Аки: Ты опоздал\nРассказчик: Он всегда опаздывал."}
-                      onChange={(e) =>
-                        setPages((prev) =>
-                          prev.map((item) => (item.id === page.id ? { ...item, transcript: e.target.value } : item))
-                        )
-                      }
+                      onChange={(e) => setTranscript(page.id, e.target.value)}
                       rows={4}
                       className="w-full resize-none rounded-lg border border-border bg-secondary/50 p-2 text-sm text-foreground focus:border-interactive/40 focus:outline-none transition-all"
                     />
@@ -401,15 +257,35 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
                       </p>
                     )}
 
-                    <button
-                      data-testid={`manga-speak-${i + 1}`}
-                      disabled={speakingId !== null || plan.problems.length > 0}
-                      onClick={() => speak(page)}
-                      className="mt-2 flex items-center gap-2 rounded-lg bg-interactive px-3 py-2 text-sm text-interactive-foreground transition-all disabled:opacity-50"
-                    >
-                      {busyWithPage ? <Loader2 className="h-4 w-4 animate-spin" /> : <Volume2 className="h-4 w-4" />}
-                      {page.audio ? "Переозвучить кадр" : "Озвучить кадр"}
-                    </button>
+                    {page.voiceError && (
+                      <p data-testid={`manga-voice-error-${i + 1}`} className="mt-1.5 text-[11px] text-destructive">
+                        Озвучка не удалась: {page.voiceError}
+                      </p>
+                    )}
+
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <button
+                        data-testid={`manga-speak-${i + 1}`}
+                        disabled={isRequesting || plan.problems.length > 0}
+                        onClick={() => void speakPage(page.id)}
+                        className="flex items-center gap-2 rounded-lg bg-interactive px-3 py-2 text-sm text-interactive-foreground transition-all disabled:opacity-50"
+                      >
+                        {busyWithPage ? <Loader2 className="h-4 w-4 animate-spin" /> : <Volume2 className="h-4 w-4" />}
+                        {page.audio ? "Переозвучить кадр" : "Озвучить кадр"}
+                      </button>
+
+                      {busyWithPage && (
+                        <button
+                          data-testid={`manga-stop-${i + 1}`}
+                          onClick={stop}
+                          aria-label={`Остановить озвучку страницы ${i + 1}`}
+                          className="flex items-center gap-1.5 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive transition-all hover:bg-destructive/20"
+                        >
+                          <Square className="h-3 w-3" fill="currentColor" />
+                          Стоп
+                        </button>
+                      )}
+                    </div>
 
                     {page.audio && (
                       <div className="mt-3">

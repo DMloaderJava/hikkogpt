@@ -16,9 +16,9 @@ function AppRoutes() {
   const { user, loading } = useAuth();
   const [DevPreview, setDevPreview] = useState<ComponentType | null>(null);
 
-  // Дев-стенды по хэшу: #voice-preview — сфера, #input-preview — строка ввода
-  // (см. components/dev). В production ветка вырезается целиком вместе с
-  // динамическими импортами.
+  // Дев-стенды по хэшу: #voice-preview — сфера, #input-preview — строка ввода,
+  // #manga-preview — озвучиватель манги (см. components/dev). В production
+  // ветка вырезается целиком вместе с динамическими импортами.
   useEffect(() => {
     if (!import.meta.env.DEV) return;
     if (window.location.hash === "#voice-preview") {
@@ -28,6 +28,10 @@ function AppRoutes() {
     } else if (window.location.hash === "#input-preview") {
       void import("@/components/dev/ChatInputDemo").then((mod) =>
         setDevPreview(() => mod.ChatInputDemo)
+      );
+    } else if (window.location.hash === "#manga-preview") {
+      void import("@/components/dev/MangaVoiceDemo").then((mod) =>
+        setDevPreview(() => mod.MangaVoiceDemo)
       );
     }
   }, []);

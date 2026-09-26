@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import { edgeJson, edgeRequest, isAbortError } from "@/lib/edgeAuth";
 import { useAuth } from "@/hooks/useAuth";
 import { useSounds } from "@/hooks/useSounds";
 
@@ -23,9 +24,8 @@ export interface Chat {
   updatedAt: Date;
 }
 
-const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat`;
-const IMAGE_SEARCH_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/image-search`;
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+const CHAT_FN = "chat";
+const IMAGE_SEARCH_FN = "image-search";
 
 // Resolves [IMAGE_SEARCH: query] tags → markdown images
 async function resolveImageSearchTags(text: string): Promise<string> {
@@ -38,15 +38,8 @@ async function resolveImageSearchTags(text: string): Promise<string> {
     matches.map(async (match) => {
       const query = match[1].trim();
       try {
-        const { getEdgeAuthHeaders } = await import("@/lib/edgeAuth");
-        const resp = await fetch(IMAGE_SEARCH_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...(await getEdgeAuthHeaders()) },
-          body: JSON.stringify({ query }),
-        });
-        if (!resp.ok) return { match: match[0], replacement: "" };
-        const data = await resp.json();
-        const imgs: { url: string; title: string }[] = data.results || [];
+        const data = await edgeJson<{ results?: { url: string; title: string }[] }>(IMAGE_SEARCH_FN, { query });
+        const imgs = data.results || [];
         if (imgs.length === 0) return { match: match[0], replacement: "" };
         const mdImages = imgs.slice(0, 3).map(img => `![${img.title || query}](${img.url})`).join("\n");
         return { match: match[0], replacement: `\n${mdImages}\n` };
@@ -306,25 +299,13 @@ export function useChat() {
       );
 
       try {
-        const { data: { session } } = await supabase.auth.getSession();
-        const accessToken = session?.access_token ?? import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-        const resp = await fetch(CHAT_URL, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${accessToken}`,
-            apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-          },
-          body: JSON.stringify({ messages: apiMessages, model: selectedModel, thinking: thinkingEnabled }),
+        // Тот же путь, что и у остальных запросов фич (см. src/lib/edgeAuth.ts):
+        // заголовки Authorization + apikey, signal от AbortController, ошибка
+        // сервера читается из { error } и уходит в toast.
+        const resp = await edgeRequest(CHAT_FN, {
+          body: { messages: apiMessages, model: selectedModel, thinking: thinkingEnabled },
           signal: controller.signal,
         });
-
-        if (!resp.ok) {
-          const errData = await resp.json().catch(() => ({}));
-          toast.error(errData.error || `Ошибка: ${resp.status}`);
-          setIsStreaming(false);
-          return;
-        }
 
         if (!resp.body) {
           toast.error("Нет ответа от сервера");
@@ -457,11 +438,13 @@ export function useChat() {
           supabase.from("chats").update({ updated_at: new Date().toISOString() }).eq("id", chatId),
         ]);
       } catch (e: unknown) {
-        if (e instanceof DOMException && e.name === "AbortError") {
-          // User stopped
+        if (isAbortError(e, controller.signal)) {
+          // Пользователь нажал «Стоп» — это не ошибка
         } else {
           console.error("Stream error:", e);
-          toast.error("Ошибка при получении ответа");
+          // EdgeRequestError несёт текст сервера ({ error } или код ответа) —
+          // показываем его, а не общую формулировку.
+          toast.error(e instanceof Error && e.message ? e.message : "Ошибка при получении ответа");
         }
       }
 
