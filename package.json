@@ -11,6 +11,9 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
+    "api": "node api/src/server.ts",
+    "api:test": "node --test \"api/test/*.test.ts\"",
+    "api:typecheck": "tsc -p tsconfig.api.json --noEmit",
     "predev": "bunx tsx scripts/generate-sitemap.ts",
     "prebuild": "bunx tsx scripts/generate-sitemap.ts"
   },
