@@ -334,8 +334,10 @@ npm run api:smoke -- <url>   # смоук-проверка живого депл
 Работает и как serverless-функция: `api/api/[[...path]].ts` — адаптер к тому же
 роутеру, `api/vercel.json` описывает runtime и маршруты. Важно: **Root Directory
 проекта на Vercel должен быть `api/`**, иначе платформа превратит в функции все
-файлы `api/src` и `api/test`. Подробности, переменные окружения и лимиты
-(maxDuration, Fluid Compute, холодные старты) — в [`docs/vercel.md`](docs/vercel.md).
+файлы `api/src` и `api/test` — **сборка деплоя упадёт** (ровно это и показывает
+красный чек «Vercel» на PR, пока в дашборде не выставлен Root Directory).
+Подробности, переменные окружения, лимиты (maxDuration, Fluid Compute, холодные
+старты) и troubleshooting — в [`docs/vercel.md`](docs/vercel.md).
 
 ## Production
 
