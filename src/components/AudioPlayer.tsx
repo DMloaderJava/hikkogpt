@@ -1,9 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { Play, Pause, Download, RotateCcw, Volume2, VolumeX } from "lucide-react";
+import { STOP_SPEECH_EVENT } from "@/lib/speechEvents";
 
 interface AudioPlayerProps {
   src: string;
   fileName?: string;
+  /**
+   * Запускать ли воспроизведение при монтировании. По умолчанию да — так ждут
+   * «Озвучку диалога». Для списков из нескольких плееров (озвучиватель манги)
+   * автозапуск нужно выключать, иначе при переоткрытии окна стартуют все сразу.
+   */
+  autoPlay?: boolean;
 }
 
 const fmt = (s: number) => {
@@ -13,7 +20,7 @@ const fmt = (s: number) => {
   return `${m}:${sec.toString().padStart(2, "0")}`;
 };
 
-export function AudioPlayer({ src, fileName = "dialog.wav" }: AudioPlayerProps) {
+export function AudioPlayer({ src, fileName = "dialog.wav", autoPlay = true }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
   const [current, setCurrent] = useState(0);
@@ -26,6 +33,17 @@ export function AudioPlayer({ src, fileName = "dialog.wav" }: AudioPlayerProps) 
     setCurrent(0);
     setDuration(0);
   }, [src]);
+
+  // Глобальный «стоп»: голосовой режим Gemini Live и озвучка сообщений чата
+  // не должны звучать вместе с этим плеером (см. src/lib/speechEvents.ts).
+  useEffect(() => {
+    const stop = () => {
+      const a = audioRef.current;
+      if (a && !a.paused) a.pause();
+    };
+    window.addEventListener(STOP_SPEECH_EVENT, stop);
+    return () => window.removeEventListener(STOP_SPEECH_EVENT, stop);
+  }, []);
 
   const onLoaded = () => {
     const a = audioRef.current;
@@ -58,7 +76,7 @@ export function AudioPlayer({ src, fileName = "dialog.wav" }: AudioPlayerProps) 
       <audio
         ref={audioRef}
         src={src}
-        autoPlay
+        autoPlay={autoPlay}
         onLoadedMetadata={onLoaded}
         onDurationChange={onLoaded}
         onTimeUpdate={(e) => setCurrent((e.target as HTMLAudioElement).currentTime)}
