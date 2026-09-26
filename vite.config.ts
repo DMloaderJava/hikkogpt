@@ -14,6 +14,21 @@ export default defineConfig(({ mode }) => ({
     hmr: {
       overlay: false,
     },
+    // Прокси для приватного API (api/) — нужен только если подключаете его
+    // из фронтенда: браузер ходит относительным URL /private-api, а Vite
+    // проксирует запросы на локальный сервер API (см. api/README.md).
+    // Отключён, пока не задан VITE_PRIVATE_API_URL — на обычную разработку не влияет.
+    ...(process.env.VITE_PRIVATE_API_URL
+      ? {
+          proxy: {
+            "/private-api": {
+              target: process.env.VITE_PRIVATE_API_URL,
+              changeOrigin: true,
+              rewrite: (p: string) => p.replace(/^\/private-api/, ""),
+            },
+          },
+        }
+      : {}),
   },
   plugins: [react(), mode === "development" && componentTagger()].filter(Boolean),
   resolve: {

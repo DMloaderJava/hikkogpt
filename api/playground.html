@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>hikkoGPT · приватный API</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0d12;
+        --panel: #141824;
+        --line: #232a3b;
+        --text: #e8ecf5;
+        --muted: #8b95ad;
+        --accent: #7c5cff;
+        --ok: #3ddc97;
+        --err: #ff6b6b;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: radial-gradient(1200px 600px at 20% -10%, #1b1440 0%, var(--bg) 55%);
+        color: var(--text);
+        font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      }
+      main { max-width: 860px; margin: 0 auto; padding: 32px 20px 64px; }
+      h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -0.01em; }
+      p.sub { margin: 0 0 24px; color: var(--muted); font-size: 13.5px; }
+      .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 16px; }
+      label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.06em; }
+      input, textarea, select {
+        width: 100%; background: #0e1220; color: var(--text); border: 1px solid var(--line);
+        border-radius: 10px; padding: 10px 12px; font: inherit; outline: none;
+      }
+      input:focus, textarea:focus { border-color: var(--accent); }
+      textarea { min-height: 92px; resize: vertical; }
+      .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      .actions { display: flex; gap: 10px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+      button {
+        background: var(--accent); color: white; border: 0; border-radius: 10px;
+        padding: 10px 16px; font: inherit; font-weight: 600; cursor: pointer;
+      }
+      button.ghost { background: transparent; border: 1px solid var(--line); color: var(--muted); }
+      button:disabled { opacity: 0.5; cursor: default; }
+      .badge { font-size: 12px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+      .badge.ok { color: var(--ok); border-color: #1f4a3a; }
+      .badge.err { color: var(--err); border-color: #5a2730; }
+      pre {
+        background: #0a0e18; border: 1px solid var(--line); border-radius: 12px;
+        padding: 14px; overflow: auto; max-height: 340px; margin: 0;
+        white-space: pre-wrap; word-break: break-word; font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      code.k { color: #9fd0ff; }
+      .hint { color: var(--muted); font-size: 12.5px; margin-top: 8px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>hikkoGPT · приватный API</h1>
+      <p class="sub">
+        Доступ только для e-mail из белого списка. Страница использует те же эндпоинты,
+        что и TypeScript-клиент: <code class="k">/api/v1/health</code>,
+        <code class="k">/api/v1/account</code>, <code class="k">/api/v1/chat/completions</code>.
+      </p>
+
+      <div class="card">
+        <div class="row">
+          <div>
+            <label for="key">Ключ доступа (Bearer)</label>
+            <input id="key" placeholder="hk1.… — из консоли сервера или POST /api/v1/admin/token" autocomplete="off" />
+          </div>
+          <div>
+            <label for="email">…или e-mail (режим разработки)</label>
+            <input id="email" value="babaevafarida8@gmail.com" autocomplete="off" />
+          </div>
+        </div>
+        <div class="actions">
+          <button id="check" class="ghost">Проверить доступ</button>
+          <span id="status" class="badge">не проверено</span>
+          <span id="mode" class="badge">режим: —</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <label for="prompt">Сообщение</label>
+        <textarea id="prompt">Объясни в двух предложениях, чем этот API отличается от обычного чата.</textarea>
+        <div class="row" style="margin-top: 12px">
+          <div>
+            <label for="model">Модель</label>
+            <select id="model">
+              <option value="hikko-gpt">hikko-gpt</option>
+              <option value="hikko-gpt-turbo">hikko-gpt-turbo</option>
+              <option value="hikko-gpt-smart">hikko-gpt-smart</option>
+            </select>
+          </div>
+          <div>
+            <label for="stream">Поток (SSE)</label>
+            <select id="stream">
+              <option value="1">включён</option>
+              <option value="0">выключен</option>
+            </select>
+          </div>
+        </div>
+        <div class="actions">
+          <button id="send">Отправить</button>
+          <span id="meta" class="badge">—</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <label for="out">Ответ</label>
+        <pre id="out">Здесь появится ответ…</pre>
+        <p class="hint">
+          TypeScript-подключение: <code class="k">new HikkoApiClient({ baseUrl, apiKey })</code> —
+          см. <code class="k">api/client/src/client.ts</code> и примеры в <code class="k">api/examples/</code>.
+        </p>
+      </div>
+    </main>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const out = $("out");
+
+      function headers(json) {
+        const h = {};
+        const key = $("key").value.trim();
+        const email = $("email").value.trim();
+        if (key) h.Authorization = "Bearer " + key;
+        else if (email) h["X-Hikko-Email"] = email;
+        if (json) h["Content-Type"] = "application/json";
+        return h;
+      }
+
+      async function check() {
+        $("status").textContent = "проверяю…";
+        $("status").className = "badge";
+        try {
+          const health = await (await fetch("/api/v1/health")).json();
+          $("mode").textContent = "режим: " + health.mode;
+          const res = await fetch("/api/v1/account", { headers: headers(false) });
+          const body = await res.json();
+          if (!res.ok) throw new Error(body?.error?.message || ("HTTP " + res.status));
+          $("status").textContent = "доступ: " + body.email + " (" + body.auth_method + ")";
+          $("status").className = "badge ok";
+          if (!$("key").value.trim()) {
+            out.textContent = "Доступ разрешён по e-mail (режим разработки).\nДля боевого подключения возьмите ключ из консоли сервера.";
+          }
+        } catch (e) {
+          $("status").textContent = "отказано";
+          $("status").className = "badge err";
+          out.textContent = "Ошибка доступа: " + e.message;
+        }
+      }
+
+      async function send() {
+        const started = performance.now();
+        $("send").disabled = true;
+        $("meta").textContent = "…";
+        out.textContent = "";
+        const payload = {
+          model: $("model").value,
+          messages: [{ role: "user", content: $("prompt").value }],
+          stream: $("stream").value === "1",
+        };
+        try {
+          const res = await fetch("/api/v1/chat/completions", {
+            method: "POST",
+            headers: headers(true),
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) {
+            const body = await res.json().catch(() => null);
+            throw new Error(body?.error?.message || ("HTTP " + res.status));
+          }
+          if (!payload.stream) {
+            const data = await res.json();
+            out.textContent = data.choices[0].message.content;
+            $("meta").textContent = data.provider + " · " + data.usage.total_chars + " симв. · " + Math.round(performance.now() - started) + " мс";
+          } else {
+            const reader = res.body.getReader();
+            const dec = new TextDecoder();
+            let buf = "", pieces = 0;
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buf += dec.decode(value, { stream: true });
+              let i = buf.indexOf("\n");
+              while (i !== -1) {
+                let line = buf.slice(0, i).trim();
+                buf = buf.slice(i + 1);
+                i = buf.indexOf("\n");
+                if (!line.startsWith("data:")) continue;
+                const raw = line.slice(5).trim();
+                if (!raw || raw === "[DONE]") continue;
+                const chunk = JSON.parse(raw);
+                if (chunk.error) throw new Error(chunk.error.message);
+                const piece = chunk.choices?.[0]?.delta?.content;
+                if (piece) { pieces++; out.textContent += piece; }
+              }
+            }
+            $("meta").textContent = "stream · " + pieces + " кусочков · " + Math.round(performance.now() - started) + " мс";
+          }
+        } catch (e) {
+          out.textContent = "Ошибка: " + e.message;
+          $("meta").textContent = "сбой";
+        } finally {
+          $("send").disabled = false;
+        }
+      }
+
+      $("check").addEventListener("click", check);
+      $("send").addEventListener("click", send);
+      check();
+    </script>
+  </body>
+</html>

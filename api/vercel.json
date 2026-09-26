@@ -1,0 +1,24 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "//": "Root Directory проекта на Vercel должен быть api/. Тогда этот конфиг — корневой, а src/ не превращается в набор функций.",
+  "version": 2,
+  "public": false,
+  "builds": [
+    {
+      "src": "api/[[...path]].ts",
+      "use": "@vercel/node",
+      "config": {
+        "maxDuration": 60,
+        "memory": 1024,
+        "supportsResponseStreaming": true,
+        "includeFiles": "playground.html"
+      }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "api/[[...path]].ts"
+    }
+  ]
+}
