@@ -31,8 +31,8 @@ function useTTS() {
       .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
       .replace(/!\[[^\]]*\]\([^)]+\)/g, "")
       .replace(/---/g, "")
-      .replace(/\n{2,}/g, ". ")
-      .replace(/\n/g, " ")
+      .replace(/\n{2,}(?!\s*Speaker\s*\d+\s*:)/gi, ". ")
+      .replace(/\n(?!\s*Speaker\s*\d+\s*:)/gi, " ")
       .trim();
 
     if (!clean) return;
@@ -40,10 +40,10 @@ function useTTS() {
     setS("loading");
 
     try {
-      const resp = await fetch(`${SUPABASE_URL}/functions/v1/gemini-tts`, {
+      const resp = await fetch(`${SUPABASE_URL}/functions/v1/dialog-tts`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(await getEdgeAuthHeaders()) },
-        body: JSON.stringify({ text: clean, voice }),
+        body: JSON.stringify({ transcript: /^Speaker\s*\d+\s*:/im.test(clean) ? clean : `Speaker 1: ${clean}`, voices: { "1": voice } }),
       });
 
       if (!resp.ok) {

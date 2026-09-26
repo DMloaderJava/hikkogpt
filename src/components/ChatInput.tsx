@@ -1,7 +1,9 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { ArrowUp, Square, X, Image, Search, Mic, MicOff, Loader2, Plus, AudioLines, Camera, Volume2 } from "lucide-react";
+import { ArrowUp, Square, X, Image, Search, Mic, MicOff, Loader2, Plus, AudioLines, Camera, Volume2, BookOpen, FileText } from "lucide-react";
 import { toast } from "@/components/ui/sonner";
 import { useVoice } from "@/hooks/useVoice";
+import { MangaVoiceModal } from "@/components/MangaVoiceModal";
+import { DOCUMENT_ACCEPT, isSupportedDocument, readDocument } from "@/lib/documentAttachments";
 import { DialogTtsModal } from "@/components/DialogTtsModal";
 import { CameraBottomSheet } from "@/components/CameraBottomSheet";
 import { PlusMenu } from "@/components/PlusMenu";
@@ -39,10 +41,14 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
   const [imagePreviews, setImagePreviews] = useState<ImageAttachment[]>([]);
   const [deepSearchMode, setDeepSearchMode] = useState(false);
   const [ttsOpen, setTtsOpen] = useState(false);
+  const [mangaOpen, setMangaOpen] = useState(false);
+  const [documents, setDocuments] = useState<File[]>([]);
+  const [isPreparingDocuments, setIsPreparingDocuments] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [isPreparingImages, setIsPreparingImages] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const documentInputRef = useRef<HTMLInputElement>(null);
 
   const { state: voiceState, supported: voiceSupported, toggle: toggleVoice } = useVoice({
     onTranscript: (text) => {
@@ -96,6 +102,14 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
     setImagePreviews((prev) => [...prev, ...toProcess.map((file) => createImageAttachment(file))]);
   };
 
+  const handleDocumentSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = "";
+    const valid = files.filter(isSupportedDocument);
+    if (valid.length !== files.length) toast.warning("Поддерживаются PDF и текстовые файлы до 10 МБ");
+    setDocuments(prev => [...prev, ...valid].slice(0, 5));
+  };
+
   const removeImage = (id: string) => {
     setImagePreviews((prev) => {
       const target = prev.find((a) => a.id === id);
@@ -110,16 +124,27 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
 
   const submitAsync = async () => {
     if (isStreaming) { onStop(); return; }
-    if (isPreparingImages) return;
-    if (!value.trim() && imagePreviews.length === 0) return;
-    if (deepSearchMode && onDeepSearch) {
+    if (isPreparingImages || isPreparingDocuments) return;
+    if (!value.trim() && imagePreviews.length === 0 && documents.length === 0) return;
+    if (deepSearchMode && onDeepSearch && documents.length === 0 && imagePreviews.length === 0) {
       onDeepSearch(value.trim());
       setValue("");
       setDeepSearchMode(false);
       if (textareaRef.current) textareaRef.current.style.height = "auto";
       return;
     }
-    const text = value.trim() || (imagePreviews.length > 0 ? "Что на этих изображениях?" : "");
+    let text = value.trim() || (imagePreviews.length > 0 ? "Что на этих изображениях?" : "Расскажи о файлах");
+    if (documents.length) {
+      setIsPreparingDocuments(true);
+      try {
+        text += "\n\n" + (await Promise.all(documents.map(readDocument))).join("\n\n");
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Не удалось прочитать файл");
+        setIsPreparingDocuments(false);
+        return;
+      }
+      setIsPreparingDocuments(false);
+    }
     if (imagePreviews.length > 0) {
       // Единственное место, где Blob превращаются в base64 — момент отправки.
       setIsPreparingImages(true);
@@ -137,6 +162,7 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
     }
     setValue("");
     clearPreviews();
+    setDocuments([]);
     if (textareaRef.current) textareaRef.current.style.height = "auto";
   };
 
@@ -174,6 +200,9 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
       },
     ];
 
+    items.push({ id: "documents", label: "Прикрепить файл", description: "PDF, MD, TXT, CSV, JSON и другие текстовые файлы", icon: FileText, disabled: documents.length >= 5, onSelect: () => documentInputRef.current?.click() });
+    items.push({ id: "manga", label: "Озвучиватель манги", description: "Анализ страниц и голоса персонажей", icon: BookOpen, onSelect: () => setMangaOpen(true) });
+
     if (deepSearchEnabled) {
       items.push({
         id: "deep-search",
@@ -196,7 +225,7 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
     });
 
     return items;
-  }, [atImageLimit, limitTitle, deepSearchEnabled, deepSearchUsed, deepSearchMode]);
+  }, [atImageLimit, limitTitle, deepSearchEnabled, deepSearchUsed, deepSearchMode, documents.length]);
 
   return (
     <div className="mx-auto w-full max-w-3xl px-2 sm:px-4 pb-2 sm:pb-4" style={{ paddingBottom: "max(8px, env(safe-area-inset-bottom, 8px))" }}>
@@ -218,6 +247,8 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
           )}
         </div>
       )}
+
+      {documents.length > 0 && <div className="mb-2 flex flex-wrap gap-2">{documents.map((file, i) => <button key={`${file.name}-${i}`} onClick={() => setDocuments(prev => prev.filter((_, n) => n !== i))} className="rounded-lg bg-secondary px-2 py-1 text-xs" title="Удалить файл">{file.name} ×</button>)}</div>}
 
       {deepSearchMode && (
         <div className="mb-2 flex items-center gap-2 rounded-xl bg-interactive/10 px-3 py-1.5 text-sm text-interactive animate-slide-up">
@@ -245,6 +276,7 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
       )}
 
       <div className="relative flex items-end rounded-2xl border border-border bg-secondary/50 shadow-sm transition-all duration-200 focus-within:border-interactive/40 focus-within:shadow-md focus-within:shadow-interactive/5">
+        <input ref={documentInputRef} type="file" accept={DOCUMENT_ACCEPT} multiple className="hidden" onChange={handleDocumentSelect} data-testid="chat-document-input" />
         <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden" onChange={handleFileSelect} data-testid="chat-file-input" />
 
         {/* Left buttons: частое — в строке, остальное — под «+» */}
@@ -311,11 +343,11 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
 
         <button
           onClick={handleSubmit}
-          disabled={(!isStreaming && !value.trim() && imagePreviews.length === 0) || isPreparingImages}
+          disabled={(!isStreaming && !value.trim() && imagePreviews.length === 0 && documents.length === 0) || isPreparingImages}
           aria-label={isStreaming ? "Остановить" : "Отправить"}
           className={`m-1.5 sm:m-2 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg transition-all active:scale-90 ${
             isStreaming ? "bg-foreground text-background"
-            : value.trim() || imagePreviews.length > 0 ? "bg-interactive text-interactive-foreground hover:opacity-90 shadow-sm shadow-interactive/20"
+            : value.trim() || imagePreviews.length > 0 || documents.length > 0 ? "bg-interactive text-interactive-foreground hover:opacity-90 shadow-sm shadow-interactive/20"
             : "bg-muted text-muted-foreground cursor-not-allowed"
           }`}
         >
@@ -325,6 +357,7 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
         </button>
       </div>
 
+      <MangaVoiceModal open={mangaOpen} onClose={() => setMangaOpen(false)} />
       <DialogTtsModal open={ttsOpen} onClose={() => setTtsOpen(false)} />
 
       <CameraBottomSheet
