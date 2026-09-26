@@ -21,6 +21,6 @@
     "forceConsistentCasingInFileNames": true
   },
   "include": ["api/**/*.ts"],
-  "//exclude": "react-hook.tsx — шаблон для src/ (алиас @/ и JSX), проверяется в составе приложения",
-  "exclude": ["api/examples/react-hook.tsx"]
+  "//exclude": "react-hook.tsx — шаблон для src/ (алиас @/ и JSX), проверяется в составе приложения. openai-sdk.ts — пример с SDK openai (пакет есть в devDependencies, но пример не часть сервера).",
+  "exclude": ["api/examples/react-hook.tsx", "api/examples/openai-sdk.ts"]
 }

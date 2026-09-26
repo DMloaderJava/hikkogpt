@@ -387,10 +387,11 @@ test(
   async () => {
     await withServer(makeConfig(), async (baseUrl) => {
       const { default: OpenAI } = await import("openai");
-      const client = new OpenAI({ baseURL: `${baseUrl}/v1`, apiKey: KEY, maxRetries: 0 });
+      type SdkClient = InstanceType<typeof import("openai").default>;
+      const client: SdkClient = new OpenAI({ baseURL: `${baseUrl}/v1`, apiKey: KEY, maxRetries: 0 });
 
       const models = await client.models.list();
-      const ids = models.data.map((model) => model.id);
+      const ids = models.data.map((model: { id: string }) => model.id);
       assert.ok(ids.includes("hikko-gpt"));
 
       const completion = await client.chat.completions.create({

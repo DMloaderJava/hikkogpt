@@ -25,12 +25,16 @@ api/
 │  ├─ upstream.ts      # Gemini / OpenAI-совместимый шлюз / echo-заглушка (+ function calling)
 │  ├─ config.ts, env.ts, types.ts
 ├─ client/src/client.ts  # TypeScript-SDK (HikkoApiClient, HikkoApiError)
+├─ api/[[...path]].ts    # адаптер для Vercel Functions (тот же роутер)
+├─ vercel.json           # @vercel/node, routes, maxDuration, includeFiles
+├─ scripts/smoke.ts      # смоук-проверка задеплоенного API (15 проверок)
 ├─ examples/             # 5 готовых примеров подключения (включая SDK `openai`)
 ├─ docs/
 │  ├─ openai-compatible.md  # как подключить Cline/Cursor/Continue
-│  └─ deploy.md             # чек-лист, systemd, reverse-proxy с SSE
+│  ├─ deploy.md             # чек-лист, systemd, reverse-proxy с SSE
+│  └─ vercel.md             # деплой на Vercel: Root Directory, env, лимиты
 ├─ playground.html       # страничка для ручной проверки (отдаётся на GET /)
-└─ test/                 # 56 тестов, node --test
+└─ test/                 # 64 теста, node --test
 ```
 
 ---
@@ -40,9 +44,14 @@ api/
 ```bash
 npm run api                 # поднять сервер (порт 8787)
 node api/examples/basic.ts  # подключиться из TypeScript и задать вопрос
-npm run api:test            # тесты
+npm run api:test            # 64 теста (node --test)
 npm run api:typecheck       # tsc --noEmit
+npm run api:smoke -- http://localhost:8787 --api-key hk1.…   # смоук-проверка
 ```
+
+Деплой: на свой сервер — [`docs/deploy.md`](docs/deploy.md) (systemd + Caddy/nginx),
+на Vercel — [`docs/vercel.md`](docs/vercel.md) (Root Directory `api/`, адаптер
+`api/api/[[...path]].ts`, переменные окружения и лимиты платформы).
 
 При старте сервер печатает готовый ключ для разрешённого адреса:
 
@@ -303,8 +312,9 @@ curl -s -X POST localhost:8787/api/v1/admin/token \
 ## Тесты и типы
 
 ```bash
-npm run api:test        # node --test api/test/*.test.ts → 56 тестов
+npm run api:test        # node --test api/test/*.test.ts → 64 теста
 npm run api:typecheck   # tsc -p tsconfig.api.json --noEmit
+npm run api:smoke -- <url>   # смоук-проверка живого деплоя (отчёт ✅/⚠️/❌)
 ```
 
 Покрыто: белый список (регистр/пробелы/похожие адреса), подпись и срок жизни
@@ -318,6 +328,14 @@ npm run api:typecheck   # tsc -p tsconfig.api.json --noEmit
 `api/` лежит вне `src/` и в сборку Vite не попадает.
 
 ---
+
+## Vercel
+
+Работает и как serverless-функция: `api/api/[[...path]].ts` — адаптер к тому же
+роутеру, `api/vercel.json` описывает runtime и маршруты. Важно: **Root Directory
+проекта на Vercel должен быть `api/`**, иначе платформа превратит в функции все
+файлы `api/src` и `api/test`. Подробности, переменные окружения и лимиты
+(maxDuration, Fluid Compute, холодные старты) — в [`docs/vercel.md`](docs/vercel.md).
 
 ## Production
 

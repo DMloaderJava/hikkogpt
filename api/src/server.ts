@@ -122,6 +122,11 @@ function fail(res: http.ServerResponse, requestId: string, status: number, code:
 }
 
 async function readBody(req: http.IncomingMessage, limit: number): Promise<unknown> {
+  // Serverless-рантаймы (Vercel) сами разбирают JSON и кладут его в req.body,
+  // а поток к этому моменту уже вычитан — итерировать его бессмысленно.
+  const preParsed = (req as http.IncomingMessage & { body?: unknown }).body;
+  if (preParsed !== undefined && preParsed !== null) return preParsed;
+
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
@@ -615,18 +620,14 @@ async function handleAdminToken(req: http.IncomingMessage, res: http.ServerRespo
   );
 }
 
-function servePlayground(res: http.ServerResponse, requestId: string, config: ApiConfig): void {
+/**
+ * Отдаёт страницу-песочницу. Возвращает промис: на serverless (Vercel) функция
+ * обязана дождаться записи ответа, иначе инстанс заморозят до отправки.
+ */
+async function servePlayground(res: http.ServerResponse, requestId: string, config: ApiConfig): Promise<void> {
   const file = path.join(repoRoot, "api", "playground.html");
-  fs.readFile(file, (error, data) => {
-    if (error) {
-      res.writeHead(404, {
-        "Content-Type": "text/plain; charset=utf-8",
-        "X-Request-Id": requestId,
-        ...corsHeaders(config),
-      });
-      res.end("playground.html не найден");
-      return;
-    }
+  try {
+    const data = await fs.promises.readFile(file);
     res.writeHead(200, {
       "Content-Type": "text/html; charset=utf-8",
       "Content-Length": data.length,
@@ -634,7 +635,14 @@ function servePlayground(res: http.ServerResponse, requestId: string, config: Ap
       ...corsHeaders(config),
     });
     res.end(data);
-  });
+  } catch {
+    res.writeHead(404, {
+      "Content-Type": "text/plain; charset=utf-8",
+      "X-Request-Id": requestId,
+      ...corsHeaders(config),
+    });
+    res.end("playground.html не найден");
+  }
 }
 
 /** Чистая функция маршрутизации — удобно тестировать без поднятого порта. */
@@ -681,8 +689,8 @@ export async function routeRequest(req: http.IncomingMessage, res: http.ServerRe
         respond(404);
         return;
       }
-      servePlayground(res, requestId, deps.config);
-      respond(200);
+      await servePlayground(res, requestId, deps.config);
+      respond(res.statusCode || 200);
       return;
     }
     if (route === "/api/v1/health" && (method === "GET" || method === "HEAD")) {

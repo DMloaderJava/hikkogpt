@@ -14,6 +14,9 @@ npm run api                 # http://localhost:8787, ключ напечатае
 GEMINI_API_KEYS=AIza… npm run api
 ```
 
+Деплой: на свой сервер — [`deploy.md`](deploy.md), на Vercel — [`vercel.md`](vercel.md)
+(Base URL станет `https://<ваш-проект>.vercel.app/v1`).
+
 Для боевого использования задайте свой секрет и (опционально) статический ключ:
 
 ```bash
@@ -123,4 +126,4 @@ curl -s localhost:8787/v1/chat/completions \
 `api/test/upstream-openai.test.ts` дополнительно поднимает поддельный
 OpenAI-совместимый шлюз и проверяет сквозной проход: текст и `usage`, проброс
 ключа апстрима, `tool_calls` в обычном ответе и сборку `tool_calls` из дельт в
-потоке, а также `502 upstream_error` при отказе шлюза. Итого 56 тестов (`api/test/production.test.ts` добавляет проверки production-режима: отказ запуска с дефолтным секретом, приватность `/health`, SSE-пинги, обрыв потока клиентом).
+потоке, а также `502 upstream_error` при отказе шлюза. Итого 64 теста (`api/test/production.test.ts` добавляет проверки production-режима: отказ запуска с дефолтным секретом, приватность `/health`, SSE-пинги, обрыв потока клиентом).
