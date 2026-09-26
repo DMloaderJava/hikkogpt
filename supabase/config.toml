@@ -23,3 +23,6 @@ verify_jwt = false
 # пользователя из query-параметра через supabase.auth.getUser(token).
 [functions.gemini-live]
 verify_jwt = false
+
+[functions.manga-analyze]
+verify_jwt = false
