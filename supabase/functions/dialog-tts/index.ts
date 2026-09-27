@@ -113,6 +113,32 @@ serve(async (req) => {
       return ALLOWED_VOICES[idx >= 0 ? idx : 0];
     };
 
+    /**
+     * Характер персонажа («строгий ментор», «ироничный друг», «эмоциональная
+     * девушка») — необязательное поле `styles` из видео-студии: { "1": "…" }.
+     *
+     * Подмешивается в промпт TTS блоком `## Style:`, поэтому влияет на интонации,
+     * но НЕ попадает в текст реплики — иначе модель прочитала бы его вслух.
+     * Без поля запрос звучит ровно как раньше (контракт не сломан).
+     */
+    const rawStyles: Record<string, unknown> =
+      body?.styles && typeof body.styles === 'object' ? body.styles : {};
+    const styleFor = (speaker: string) => {
+      const value = rawStyles[speaker];
+      return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, 300) : '';
+    };
+    const ttsPrompt = (speakers: string[], text: string) => {
+      const styleLines = speakers
+        .map((speaker) => {
+          const style = styleFor(speaker);
+          return style ? `Speaker ${speaker} — ${style}` : '';
+        })
+        .filter(Boolean);
+      return styleLines.length
+        ? `## Style:\n${styleLines.join('\n')}\n\n## Transcript:\n${text}`
+        : `## Transcript:\n${text}`;
+    };
+
     const lines = parseTranscript(transcript);
     if (!lines.length) {
       return json({ error: 'Не найдено реплик. Формат: "Speaker 1: текст"' }, 400);
@@ -152,7 +178,8 @@ serve(async (req) => {
 
       const response = await callGemini({
         model: 'google/gemini-3.1-flash-tts-preview',
-        contents: [{ role: 'user', parts: [{ text: `## Transcript:\n${text}` }] }],
+        // Стиль персонажей (если пришёл) + сам текст: `## Style:` влияет на интонации.
+        contents: [{ role: 'user', parts: [{ text: ttsPrompt(speakers, text) }] }],
         generationConfig: {
           temperature: 1,
           responseModalities: ['AUDIO'],
@@ -184,7 +211,7 @@ serve(async (req) => {
     for (const line of lines) {
       const response = await callGemini({
         model: 'google/gemini-3.1-flash-tts-preview',
-        contents: [{ role: 'user', parts: [{ text: line.text }] }],
+        contents: [{ role: 'user', parts: [{ text: ttsPrompt([line.speaker], line.text) }] }],
         generationConfig: {
           temperature: 1,
           responseModalities: ['AUDIO'],
