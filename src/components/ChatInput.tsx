@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { ArrowUp, Square, X, Image, Search, Mic, MicOff, Loader2, Plus, AudioLines, Camera, Volume2, BookOpen, FileText } from "lucide-react";
+import { ArrowUp, Square, X, Image, Search, Mic, MicOff, Loader2, Plus, AudioLines, Camera, Volume2, BookOpen, FileText, Clapperboard } from "lucide-react";
 import { toast } from "@/components/ui/sonner";
 import { useVoice } from "@/hooks/useVoice";
 import { MangaVoiceModal } from "@/components/MangaVoiceModal";
+import { VideoStoryStudio } from "@/components/VideoStoryStudio";
 import { DOCUMENT_ACCEPT, isSupportedDocument, readDocument } from "@/lib/documentAttachments";
 import { DialogTtsModal } from "@/components/DialogTtsModal";
 import { CameraBottomSheet } from "@/components/CameraBottomSheet";
@@ -44,6 +45,7 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
   const [deepSearchMode, setDeepSearchMode] = useState(false);
   const [ttsOpen, setTtsOpen] = useState(false);
   const [mangaOpen, setMangaOpen] = useState(false);
+  const [storyOpen, setStoryOpen] = useState(false);
   const [documents, setDocuments] = useState<File[]>([]);
   const [isPreparingDocuments, setIsPreparingDocuments] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -204,6 +206,7 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
 
     items.push({ id: "documents", label: "Прикрепить файл", description: "PDF, MD, TXT, CSV, JSON и другие текстовые файлы", icon: FileText, disabled: documents.length >= 5, onSelect: () => documentInputRef.current?.click() });
     items.push({ id: "manga", label: "Озвучиватель манги", description: "Анализ страниц и голоса персонажей", icon: BookOpen, onSelect: () => setMangaOpen(true) });
+    items.push({ id: "video-story", label: "Студия видео-историй", description: "Слайды, голоса и сценарий → видео в браузере", icon: Clapperboard, onSelect: () => setStoryOpen(true) });
 
     if (deepSearchEnabled) {
       items.push({
@@ -360,6 +363,15 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
       </div>
 
       <MangaVoiceModal open={mangaOpen} onClose={() => setMangaOpen(false)} chatModel={selectedModel} />
+      <VideoStoryStudio
+        open={storyOpen}
+        onClose={() => setStoryOpen(false)}
+        onShare={({ text, images }) => {
+          // Тот же путь, что у обычного сообщения: текст + картинки (постер).
+          onSend(text, images);
+          setStoryOpen(false);
+        }}
+      />
       <DialogTtsModal open={ttsOpen} onClose={() => setTtsOpen(false)} />
 
       <CameraBottomSheet
