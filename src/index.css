@@ -245,3 +245,208 @@
 .animate-pulse-ring {
   animation: pulse-ring 1.2s ease-out infinite;
 }
+
+/* Озвучиватель манги: кольцо-прогресс, орбита этапов и диалог по ролям.
+   Повторяет процесс-анимацию дизайн-примера, но на токенах темы. */
+
+.manga-progress {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 14px 16px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at 22% 20%, hsl(var(--interactive) / 0.14), transparent 58%),
+    hsl(var(--secondary) / 0.45);
+  animation: fade-in-up 0.35s ease-out;
+}
+
+.manga-orbit {
+  position: relative;
+  display: grid;
+  width: 124px;
+  height: 124px;
+  flex: 0 0 124px;
+  place-items: center;
+}
+
+.manga-ring {
+  position: absolute;
+  inset: 6px;
+  border: 1px solid hsl(var(--interactive) / 0.22);
+  border-radius: 50%;
+}
+
+.manga-ring::before {
+  position: absolute;
+  inset: 12px;
+  border: 1px dashed hsl(var(--interactive) / 0.28);
+  border-radius: 50%;
+  content: "";
+}
+
+.manga-orbiting {
+  position: absolute;
+  inset: 0;
+}
+
+.manga-orbit.is-active .manga-orbiting {
+  animation: manga-rotate 13s linear infinite;
+}
+
+.manga-orbit.is-active .manga-orb {
+  animation: manga-counter-rotate 13s linear infinite;
+}
+
+.manga-orb {
+  position: absolute;
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid hsl(var(--border));
+  border-radius: 11px;
+  background: hsl(var(--card));
+  box-shadow: 0 8px 20px hsl(var(--foreground) / 0.12);
+  color: hsl(var(--interactive));
+}
+
+.manga-orb.one { top: 0; left: 47px; }
+.manga-orb.two { top: 47px; right: 0; }
+.manga-orb.three { bottom: 0; left: 47px; }
+.manga-orb.four { top: 47px; left: 0; }
+
+.manga-progress-ring {
+  --manga-progress: 0%;
+
+  position: relative;
+  z-index: 1;
+  display: grid;
+  width: 94px;
+  height: 94px;
+  place-items: center;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle, hsl(var(--card)) 62%, transparent 64%),
+    conic-gradient(hsl(var(--interactive)) var(--manga-progress), hsl(var(--muted)) 0);
+  transition: background 0.5s ease;
+}
+
+.manga-progress-inner { text-align: center; }
+
+.manga-percent {
+  display: block;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  color: hsl(var(--foreground));
+  font-variant-numeric: tabular-nums;
+}
+
+.manga-progress-label {
+  display: block;
+  margin-top: 2px;
+  color: hsl(var(--muted-foreground));
+  font-size: 10px;
+}
+
+.manga-sparkle {
+  position: absolute;
+  color: hsl(var(--interactive));
+  opacity: 0.7;
+}
+
+.manga-orbit.is-active .manga-sparkle {
+  animation: manga-twinkle 2s ease-in-out infinite alternate;
+}
+
+.manga-sparkle.a { top: 14px; right: 12px; }
+.manga-sparkle.b { bottom: 12px; left: 10px; animation-delay: 0.8s; }
+
+.manga-progress-text { min-width: 0; }
+
+.manga-progress-title {
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.manga-progress-detail {
+  margin: 4px 0 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+}
+
+@keyframes manga-rotate {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes manga-counter-rotate {
+  to { transform: rotate(-360deg); }
+}
+
+@keyframes manga-twinkle {
+  from { opacity: 0.35; transform: scale(0.8); }
+  to { opacity: 1; transform: scale(1.2); }
+}
+
+/* Диалог по ролям: тот же текст, что уходит в озвучку. */
+
+.manga-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.manga-dialog-line {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: hsl(var(--secondary) / 0.5);
+  animation: fade-in-up 0.3s ease-out both;
+}
+
+.manga-dialog-line:nth-child(2n) { background: hsl(var(--secondary) / 0.32); }
+
+.manga-dialog-speaker {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: hsl(var(--interactive) / 0.16);
+  color: hsl(var(--interactive));
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.manga-dialog-text {
+  color: hsl(var(--foreground));
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.manga-page-card.is-voiced {
+  border-color: hsl(var(--interactive) / 0.35);
+  box-shadow: 0 10px 30px hsl(var(--interactive) / 0.08);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .manga-orbit.is-active .manga-orbiting,
+  .manga-orbit.is-active .manga-orb,
+  .manga-orbit.is-active .manga-sparkle {
+    animation: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .manga-progress { gap: 12px; padding: 12px; }
+  .manga-orbit { width: 104px; height: 104px; flex-basis: 104px; }
+  .manga-progress-ring { width: 78px; height: 78px; }
+  .manga-orb { width: 26px; height: 26px; }
+  .manga-orb.one, .manga-orb.three { left: 39px; }
+  .manga-orb.two, .manga-orb.four { top: 39px; }
+}

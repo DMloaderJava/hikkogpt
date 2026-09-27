@@ -132,6 +132,103 @@ export function parseTranscriptLines(raw: string): {
   return { lines, names, overflow };
 }
 
+/**
+ * Диалог в том виде, в котором его ждёт пользователь и `dialog-tts`:
+ * только реплики, каждая с новой строки, между ними пустая строка.
+ *
+ *     Speaker 1: Ребята, начинаем?
+ *
+ *     Speaker 2: Я сказала тебе прекратить!
+ */
+export function formatTranscript(text: string): string {
+  return (text ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+/**
+ * Вырезает из ответа модели всё, что не является репликой.
+ *
+ * Промпт `manga-analyze` просит строго «Speaker 1: …», но модель периодически
+ * добавляет описание сцены, «Рассказчик: …», подписи кадров или markdown.
+ * Правила предсказуемые:
+ * - есть явные «Speaker N: …» — оставляем только их (пронумерованные строки и
+ *   продолжения без автора), прочий текст выбрасываем;
+ * - явных номеров нет — оставляем реплики с именами и без автора, а номера им
+ *   выдаст `planTranscript`.
+ */
+/**
+ * Служебные подписи, которые модель добавляет вопреки промпту: «Описание: …»,
+ * «Примечание: …», «[Кадр 1]», «(перевод)». Репликами они не являются.
+ */
+const SERVICE_LINE_RE =
+  /^\s*(?:\[|\(|\*|#+|`|>|\d+[.)]\s)|^\s*(?:описание|описания|примечание|комментарий|заметка|перевод|подпись|заголовок|description|note|comment|caption|translation|scene)\s*[:.\-–—)]/i;
+
+/**
+ * Вырезает из ответа модели всё, что не является репликой.
+ *
+ * Промпт `manga-analyze` просит строго «Speaker 1: …», но модель периодически
+ * добавляет описание сцены, «Рассказчик: …», подписи кадров или markdown.
+ * Правила предсказуемые:
+ * - есть явные «Speaker N: …» — оставляем только их и строки без автора
+ *   (продолжения реплик); любой текст с именем/служебной подписью выбрасываем;
+ * - явных номеров нет — оставляем реплики с именами и без автора, а номера им
+ *   выдаст `planTranscript`.
+ */
+export function dialogueOnly(raw: string): string {
+  const lines = (raw ?? "").split("\n");
+  const explicit = lines.some((line) => EXPLICIT_RE.test(line));
+  const named = lines.some((line) => {
+    const match = line.trim().match(NAMED_RE);
+    return !!match && !match[2].trimStart().startsWith("//");
+  });
+
+  const kept: string[] = [];
+  let lastWasLine = false;
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) {
+      lastWasLine = false;
+      continue;
+    }
+    // Заборы кода, подписи вида «[Кадр 1]» и служебный текст модели.
+    if (/^(```|#|\*\*|\{|\}|—\s*$)/.test(line) || SERVICE_LINE_RE.test(line)) {
+      lastWasLine = false;
+      continue;
+    }
+
+    const isExplicit = EXPLICIT_RE.test(line);
+    const isNamed = (() => {
+      const match = line.match(NAMED_RE);
+      return !!match && !match[2].trimStart().startsWith("//");
+    })();
+
+    if (isExplicit || (!explicit && (isNamed || (!named && BULLET_RE.test(line))))) {
+      kept.push(line);
+      lastWasLine = true;
+      continue;
+    }
+
+    // Строка без автора — продолжение предыдущей реплики.
+    if (lastWasLine && kept.length && !isNamed) {
+      kept[kept.length - 1] = `${kept[kept.length - 1]} ${line.replace(BULLET_RE, "").trim()}`.trim();
+      continue;
+    }
+    lastWasLine = false;
+  }
+
+  return kept.join("\n");
+}
+
+/** Ответ модели → реплики в формате `dialog-tts` (пусто, если реплик не нашли). */
+export function normalizeModelTranscript(raw: string): string {
+  const dialogue = dialogueOnly(raw ?? "");
+  return dialogue ? formatTranscript(dialogue) : "";
+}
+
 /** Приводит текст к формату `dialog-tts` и проверяет лимиты озвучки. */
 export function planTranscript(raw: string): TranscriptPlan {
   const { lines, names, overflow } = parseTranscriptLines(raw);

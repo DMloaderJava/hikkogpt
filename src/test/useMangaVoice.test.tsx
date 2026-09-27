@@ -228,9 +228,11 @@ describe("useMangaVoice: запрос анализа", () => {
 
     await analyze(hook, 1);
 
-    expect(hook.result.current.error).toBe("AI не настроен");
+    expect(hook.result.current.error).toBe("Ошибка запроса api (ответ api анализа манги: AI не настроен)");
+    expect(hook.result.current.failure?.stage).toBe("analyze-api");
+    expect(hook.result.current.failure?.status).toBe(500);
     expect(hook.result.current.pages[0].status).toBe("new");
-    expect(toast.error).toHaveBeenCalledWith("AI не настроен");
+    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("AI не настроен"));
   });
 
   it("сетевой сбой без тела ответа показывает код", async () => {
@@ -239,8 +241,9 @@ describe("useMangaVoice: запрос анализа", () => {
 
     await analyze(hook, 1);
 
-    expect(hook.result.current.error).toBe("Ошибка 502");
-    expect(toast.error).toHaveBeenCalledWith("Ошибка 502");
+    expect(hook.result.current.error).toContain("Ошибка 502");
+    expect(hook.result.current.error).toContain("ответ api анализа манги");
+    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("Ошибка 502"));
   });
 
   it("тело каждого запроса не превышает бюджет payload", async () => {
@@ -268,10 +271,11 @@ describe("useMangaVoice: запрос анализа", () => {
 
     await analyze(hook, 1);
 
-    expect(hook.result.current.error).toContain("Не удалось отправить запрос");
+    expect(hook.result.current.error).toContain("Ошибка запроса api (отправка запроса:");
     expect(hook.result.current.error).not.toContain("Failed to fetch");
+    expect(hook.result.current.failure?.stage).toBe("send-request");
     expect(hook.result.current.pages[0].status).toBe("new");
-    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("Не удалось отправить запрос"));
+    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("не дошёл до сервера"));
   });
 
   it("упавший батч не отменяет уже разобранные страницы", async () => {
@@ -297,7 +301,8 @@ describe("useMangaVoice: запрос анализа", () => {
     expect(ok).toBe(false);
     expect(hook.result.current.pages.filter((p) => p.status === "ready")).toHaveLength(ANALYZE_BATCH_SIZE);
     expect(hook.result.current.pages.filter((p) => p.status === "new")).toHaveLength(2);
-    expect(hook.result.current.error).toContain("Батч 2 из 2");
+    expect(hook.result.current.error).toContain("батч 2 из 2");
+    expect(hook.result.current.error).toContain("Сервис анализа недоступен");
   });
 });
 
@@ -317,6 +322,9 @@ describe("useMangaVoice: озвучка кадра", () => {
 
     const tts = calls.find((c) => c.fn === "dialog-tts");
     expect(ok).toBe(true);
+    // Ответ модели приведён к формату из промпта: только реплики, через пустую строку.
+    // Номера персонажей выдаёт planTranscript — в запросе уже «Speaker N».
+    expect(hook.result.current.pages[0].transcript).toBe("Рассказчик: Токио\n\nАки: Ты опоздал");
     expect(tts?.body.transcript).toBe("Speaker 1: Токио\nSpeaker 2: Ты опоздал");
     expect(tts?.body.voices["1"]).toBeTruthy();
     expect(tts?.body.voices["2"]).toBeTruthy();
@@ -355,8 +363,10 @@ describe("useMangaVoice: озвучка кадра", () => {
 
     expect(ok).toBe(false);
     expect(calls.filter((c) => c.fn === "dialog-tts")).toHaveLength(0);
+    expect(hook.result.current.error).toContain("проверка реплик перед озвучкой");
     expect(hook.result.current.error).toContain("Нет реплик для озвучки");
-    expect(toast.error).not.toHaveBeenCalled(); // это проверка ввода, а не сбой запроса
+    expect(hook.result.current.failure?.stage).toBe("dialog-check");
+    expect(toast.error).toHaveBeenCalled(); // причину видно и если окно закрыто
   });
 
   it("stop() прерывает озвучку без ошибки", async () => {
@@ -394,9 +404,11 @@ describe("useMangaVoice: озвучка кадра", () => {
     });
 
     expect(ok).toBe(false);
-    expect(hook.result.current.pages[0].voiceError).toBe("Недостаточно средств Lovable AI.");
-    expect(hook.result.current.error).toBe("Недостаточно средств Lovable AI.");
-    expect(toast.error).toHaveBeenCalledWith("Недостаточно средств Lovable AI.");
+    expect(hook.result.current.pages[0].voiceError).toBe("ответ api озвучки: Недостаточно средств Lovable AI.");
+    expect(hook.result.current.error).toBe("Ошибка запроса api (ответ api озвучки: Недостаточно средств Lovable AI.)");
+    expect(hook.result.current.failure?.stage).toBe("tts-api");
+    expect(hook.result.current.failure?.status).toBe(402);
+    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("Недостаточно средств Lovable AI."));
   });
 
   it("выбранный голос уходит в следующем запросе", async () => {
@@ -414,6 +426,56 @@ describe("useMangaVoice: озвучка кадра", () => {
 
     const voices = calls.find((c) => c.fn === "dialog-tts")?.body.voices;
     expect(voices["2"]).toBe("Fenrir");
+  });
+});
+
+describe("useMangaVoice: формат реплик из ответа модели", () => {
+  it("описание сцены и служебный текст не попадают в диалог", async () => {
+    const hook = setup();
+    handler = async (fn) =>
+      fn === "manga-analyze"
+        ? jsonResponse({
+            pages: [
+              {
+                description: "Аки стоит у ворот академии, Денджи опаздывает.",
+                transcript: [
+                  "```",
+                  "Описание: сцена у ворот.",
+                  "Speaker 1: Ребята, начинаем?",
+                  "",
+                  "Speaker 2: Я сказала тебе прекратить!",
+                  "Примечание: кадр 3",
+                  "```",
+                ].join("\n"),
+              },
+            ],
+          })
+        : audioResponse();
+
+    await analyze(hook, 1);
+
+    expect(hook.result.current.pages[0].transcript).toBe(
+      "Speaker 1: Ребята, начинаем?\n\nSpeaker 2: Я сказала тебе прекратить!"
+    );
+    expect(hook.result.current.pages[0].description).toContain("Аки стоит у ворот"); // храним, но не показываем
+  });
+
+  it("имена персонажей получают номера, если модель забыла Speaker N", async () => {
+    const hook = setup();
+    handler = async (fn) =>
+      fn === "manga-analyze"
+        ? jsonResponse({ pages: [{ description: "Кадр", transcript: "Аки: Ты опоздал\nРассказчик: Он всегда опаздывал." }] })
+        : audioResponse();
+
+    await analyze(hook, 1);
+    expect(hook.result.current.pages[0].transcript).toBe("Аки: Ты опоздал\n\nРассказчик: Он всегда опаздывал.");
+
+    await act(async () => {
+      await hook.result.current.speakPage(hook.result.current.pages[0].id);
+    });
+    expect(calls.find((c) => c.fn === "dialog-tts")?.body.transcript).toBe(
+      "Speaker 1: Ты опоздал\nSpeaker 2: Он всегда опаздывал."
+    );
   });
 });
 
@@ -465,9 +527,12 @@ describe("useMangaVoice: озвучить всё", () => {
     expect(ok).toBe(false);
     expect(tts).toBe(3); // очередь дошла до конца
     expect(hook.result.current.pages[1].voiceError).toContain("Слишком много запросов");
+    expect(hook.result.current.pages[1].voiceError).toContain("ответ api озвучки");
     expect(hook.result.current.pages[0].audio).toBeTruthy();
     expect(hook.result.current.pages[2].audio).toBeTruthy();
-    expect(hook.result.current.error).toBe("Не озвучена страница 2: Слишком много запросов, попробуйте чуть позже.");
+    expect(hook.result.current.error).toBe(
+      "Ошибка запроса api (ответ api озвучки: страница 2 — Слишком много запросов, попробуйте чуть позже.)"
+    );
   });
 
   it("страницы без реплик помечаются и не уходят на сервер", async () => {
@@ -483,7 +548,9 @@ describe("useMangaVoice: озвучить всё", () => {
     expect(ok).toBe(false);
     expect(calls.filter((c) => c.fn === "dialog-tts")).toHaveLength(2);
     expect(hook.result.current.pages[1].voiceError).toContain("Нет реплик для озвучки");
-    expect(hook.result.current.error).toContain("Не озвучена страница 2");
+    expect(hook.result.current.error).toContain("страница 2");
+    expect(hook.result.current.error).toContain("проверка реплик перед озвучкой");
+    expect(hook.result.current.failure?.stage).toBe("dialog-check");
   });
 
   it("stop() обрывает очередь: оставшиеся страницы не озвучиваются", async () => {
@@ -573,6 +640,14 @@ describe("стражи: метод тот же, что при отправке �
   it("в модалке есть остановка запросов", () => {
     expect(modalSource).toContain('data-testid="manga-stop"');
     expect(modalSource).toMatch(/onClick=\{stop\}/);
+  });
+
+  it("хук называет этап сбоя, а не показывает «Failed to fetch»", () => {
+    expect(hookSource).toContain("classifyEdgeFailure");
+    expect(hookSource).toContain("classifyPrepareFailure");
+    expect(hookSource).toContain("dialogCheckFailure");
+    expect(hookSource).toContain("normalizeModelTranscript");
+    expect(hookSource).toContain('setPhase("voicing")');
   });
 
   it("хук передаёт signal и показывает причину отказа так же, как чат", () => {

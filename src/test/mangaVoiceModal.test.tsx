@@ -150,8 +150,10 @@ describe("MangaVoiceModal: анализ", () => {
       fireEvent.click(screen.getByTestId("manga-analyze"));
     });
 
-    await waitFor(() => expect(screen.getByText("Первый кадр")).toBeTruthy());
-    expect(screen.getByText("Второй кадр")).toBeTruthy();
+    await waitFor(() => expect(screen.getByTestId("manga-transcript-1")).toHaveValue("Speaker 1: Привет"));
+    expect(screen.getByTestId("manga-transcript-2")).toHaveValue("Speaker 2: Пока");
+    // Описание сцены храним для стабильных номеров персонажей, но не показываем.
+    expect(screen.queryByText("Первый кадр")).toBeNull();
 
     const analyzeCall = calls.find((c) => c.url.endsWith("/manga-analyze"));
     expect(analyzeCall?.url).toBe(`${EDGE_FUNCTIONS_URL}/manga-analyze`);
@@ -173,8 +175,8 @@ describe("MangaVoiceModal: анализ", () => {
     fetchImpl = async () => {
       batch += 1;
       return jsonResponse({
-        pages: Array.from({ length: batch === 1 ? ANALYZE_BATCH_SIZE : 2 }, (_, i) => ({
-          description: `Кадр ${batch}.${i + 1}`,
+        pages: Array.from({ length: batch === 1 ? ANALYZE_BATCH_SIZE : 2 }, () => ({
+          description: "Кадр",
           transcript: "Speaker 1: текст",
         })),
       });
@@ -183,14 +185,14 @@ describe("MangaVoiceModal: анализ", () => {
     await act(async () => {
       fireEvent.click(screen.getByTestId("manga-analyze"));
     });
-    await waitFor(() => expect(screen.getByText("Кадр 2.2")).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId("manga-transcript-7")).toBeTruthy());
 
     const analyzeCalls = calls.filter((c) => c.url.endsWith("/manga-analyze"));
     expect(analyzeCalls).toHaveLength(2);
     expect(analyzeCalls[0].body.images).toHaveLength(ANALYZE_BATCH_SIZE);
     expect(analyzeCalls[1].body.images).toHaveLength(2);
 
-    expect(screen.getByText("Кадр 1.1")).toBeTruthy();
+    expect(screen.getByTestId("manga-transcript-1")).toHaveValue("Speaker 1: текст");
     expect(screen.getByTestId("manga-analyze").textContent).toContain("Все страницы обработаны");
   });
 
@@ -243,7 +245,7 @@ describe("MangaVoiceModal: анализ", () => {
     await act(async () => {
       fireEvent.click(screen.getByTestId("manga-analyze"));
     });
-    await waitFor(() => expect(screen.getByText("Со второго раза")).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId("manga-transcript-1")).toHaveValue("Speaker 1: да"));
     expect(calls.filter((c) => c.url.endsWith("/manga-analyze"))).toHaveLength(2);
   });
 
@@ -257,6 +259,10 @@ describe("MangaVoiceModal: анализ", () => {
     });
 
     await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("AI не настроен"));
+    expect(screen.getByTestId("manga-error").textContent).toBe(
+      "Ошибка запроса api (ответ api анализа манги: AI не настроен)"
+    );
+    expect(screen.getByTestId("manga-error-stage").textContent).toContain("500");
     expect(screen.getByTestId("manga-analyze").hasAttribute("disabled")).toBe(false);
   });
 
@@ -269,7 +275,7 @@ describe("MangaVoiceModal: анализ", () => {
       fireEvent.click(screen.getByTestId("manga-analyze"));
     });
 
-    await waitFor(() => expect(screen.getByText("Только первая")).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId("manga-transcript-1")).toHaveValue("Speaker 1: раз"));
     expect(screen.queryByTestId("manga-transcript-2")).toBeNull();
   });
 });
@@ -287,6 +293,90 @@ describe("MangaVoiceModal: озвучка", () => {
     });
     await waitFor(() => expect(screen.getByTestId("manga-speak-1")).toBeTruthy());
   }
+
+  it("показывает реплики как диалог по ролям и прячет описание сцены", async () => {
+    open();
+    setInputFiles(screen.getByTestId("manga-file-input"), [pngFile("p1.png")]);
+    fetchImpl = async (url) =>
+      url.endsWith("/manga-analyze")
+        ? jsonResponse({
+            pages: [
+              {
+                description: "Аки у ворот академии, Денджи опаздывает.",
+                transcript: "Speaker 1: Ребята, начинаем?\n\nSpeaker 2: Я сказала тебе прекратить!",
+              },
+            ],
+          })
+        : audioResponse();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("manga-analyze"));
+    });
+
+    await waitFor(() => expect(screen.getByTestId("manga-transcript-1")).toHaveValue(
+      "Speaker 1: Ребята, начинаем?\n\nSpeaker 2: Я сказала тебе прекратить!"
+    ));
+    expect(screen.queryByText(/Аки у ворот академии/)).toBeNull();
+    expect(screen.getAllByText(/Speaker 1|Speaker 2/).length).toBeGreaterThan(0);
+    expect(screen.getByText("Я сказала тебе прекратить!")).toBeTruthy();
+  });
+
+  it("процесс виден: бейдж этапа и кольцо-прогресс", async () => {
+    open();
+    expect(screen.getByTestId("manga-stage").textContent).toContain("ЭТАП 1 / 5");
+    expect(screen.getByTestId("manga-percent").textContent).toBe("0%");
+
+    setInputFiles(screen.getByTestId("manga-file-input"), [pngFile("p1.png"), pngFile("p2.png")]);
+    fetchImpl = async (url) =>
+      url.endsWith("/manga-analyze")
+        ? jsonResponse({ pages: [{ description: "а", transcript: "Speaker 1: раз" }, { description: "б", transcript: "Speaker 2: два" }] })
+        : audioResponse();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("manga-analyze"));
+    });
+    await waitFor(() => expect(screen.getByTestId("manga-transcript-2")).toBeTruthy());
+
+    // Разобраны обе страницы — процесс дошёл до конца.
+    expect(screen.getByTestId("manga-percent").textContent).toBe("100%");
+    expect(screen.getByTestId("manga-progress-label").textContent).toContain("Этап");
+    expect(screen.getByTestId("manga-progress").getAttribute("data-phase")).toBe("idle");
+
+    // Во время озвучки этап меняется.
+    fetchImpl = async (url) => {
+      if (!url.endsWith("/dialog-tts")) return jsonResponse({});
+      await new Promise((r) => setTimeout(r, 40));
+      return audioResponse();
+    };
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("manga-speak-all"));
+    });
+    await waitFor(() => expect(document.querySelectorAll("audio").length).toBe(2));
+  });
+
+  it("во время запроса кольцо-прогресс крутится и показывает этап", async () => {
+    open();
+    setInputFiles(screen.getByTestId("manga-file-input"), [pngFile("p1.png"), pngFile("p2.png")]);
+    fetchImpl = async (url) => {
+      if (!url.endsWith("/manga-analyze")) return jsonResponse({});
+      await new Promise((r) => setTimeout(r, 60));
+      return jsonResponse({
+        pages: [
+          { description: "а", transcript: "Speaker 1: раз" },
+          { description: "б", transcript: "Speaker 2: два" },
+        ],
+      });
+    };
+
+    fireEvent.click(screen.getByTestId("manga-analyze"));
+    await waitFor(() => expect(screen.getByTestId("manga-progress").getAttribute("data-active")).toBe("true"));
+    expect(["preparing", "analyzing"]).toContain(screen.getByTestId("manga-progress").getAttribute("data-phase"));
+    expect(screen.getByTestId("manga-progress-label").textContent).toMatch(/Этап [23] из 5/);
+    expect(parseInt(screen.getByTestId("manga-percent").textContent!, 10)).toBeGreaterThan(0);
+
+    await waitFor(() => expect(screen.getByTestId("manga-progress").getAttribute("data-active")).toBe("false"));
+    expect(screen.getByTestId("manga-percent").textContent).toBe("100%");
+  });
 
   it("нормализует реплики в формат dialog-tts и передаёт голоса", async () => {
     await withAnalyzedPage("Рассказчик: Токио\nАки: Ты опоздал");
@@ -313,6 +403,27 @@ describe("MangaVoiceModal: озвучка", () => {
     expect(audio.hasAttribute("autoplay")).toBe(true);
     expect(audio.getAttribute("src")).toMatch(/^blob:mock-/);
     expect(screen.getByTestId("manga-speak-1").textContent).toContain("Переозвучить");
+  });
+
+  it("после озвучки страница показывается поверх диалога и плеера", async () => {
+    await withAnalyzedPage();
+
+    // До озвучки изображение одно — превью страницы.
+    expect(screen.getAllByAltText("Страница манги 1")).toHaveLength(1);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("manga-speak-1"));
+    });
+    await waitFor(() => expect(document.querySelector("audio")).toBeTruthy());
+
+    const images = screen.getAllByAltText("Страница манги 1");
+    expect(images).toHaveLength(1);
+    const player = document.querySelector("audio")!.closest("div.mt-3, div")!;
+    // Изображение идёт после плеера — тот самый слой «поверх диалога».
+    expect(
+      images[0].compareDocumentPosition(player) & Node.DOCUMENT_POSITION_PRECEDING
+    ).toBeTruthy();
+    expect(images[0].className).toContain("animate-pop");
   });
 
   it("переозвучка отзывает прежний object URL", async () => {
@@ -366,6 +477,8 @@ describe("MangaVoiceModal: озвучка", () => {
     });
 
     await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Слишком много запросов"));
+    expect(screen.getByTestId("manga-error").textContent).toContain("Ошибка запроса api (ответ api озвучки:");
+    expect(screen.getByTestId("manga-voice-error-1").textContent).toContain("ответ api озвучки");
   });
 
   it("пустые реплики не уходят на сервер", async () => {
@@ -457,7 +570,8 @@ describe("MangaVoiceModal: озвучка", () => {
     // Вторая страница озвучена, первая помечена причиной отказа.
     expect(document.querySelectorAll("audio")).toHaveLength(1);
     expect(screen.getByTestId("manga-voice-error-1").textContent).toContain("Слишком много запросов");
-    expect(screen.getByRole("alert").textContent).toContain("Не озвучена страница 1");
+    expect(screen.getByTestId("manga-voice-error-1").textContent).toContain("ответ api озвучки");
+    expect(screen.getByRole("alert").textContent).toContain("страница 1");
   });
 
   it("«Стоп» прерывает озвучку кадра без сообщения об ошибке", async () => {

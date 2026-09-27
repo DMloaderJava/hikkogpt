@@ -33,6 +33,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { EdgeRequestError, edgeBlob, edgeJson, isAbortError } from "@/lib/edgeAuth";
+import {
+  classifyEdgeFailure,
+  classifyPrepareFailure,
+  dialogCheckFailure,
+  failureTitle,
+  isMangaFailure,
+  mangaFailure,
+  type MangaFailure,
+} from "@/lib/mangaRequestError";
 import { announceStopSpeech } from "@/lib/speechEvents";
 import {
   ANALYZE_BATCH_SIZE,
@@ -47,6 +56,8 @@ import {
   MAX_TTS_SPEAKERS,
   TTS_VOICES,
   defaultVoiceFor,
+  formatTranscript,
+  normalizeModelTranscript,
   planTranscript,
   type TranscriptPlan,
   type TtsVoice,
@@ -68,8 +79,22 @@ export interface MangaPage {
   transcript?: string;
   /** Готовая озвучка кадра (object URL). */
   audio?: string;
-  /** Почему озвучка этого кадра не удалась (пусто = всё хорошо). */
+  /** Почему озвучка этого кадра не удалась: «этап: причина» (пусто = всё хорошо). */
   voiceError?: string;
+}
+
+/** Фаза процесса — для кольца-прогресса и бейджа этапа в модалке. */
+export type MangaPhase = "idle" | "preparing" | "analyzing" | "voicing";
+
+/** Что происходит прямо сейчас: этап, процент и подпись. */
+export interface MangaProgress {
+  phase: MangaPhase;
+  /** 0..100 — для кольца-прогресса. */
+  percent: number;
+  /** Подпись этапа: «Этап 2 из 5 · Сжатие страниц». */
+  label: string;
+  /** Детали: «Батч 2 из 3 · обработано 5 из 12 страниц». */
+  detail?: string;
 }
 
 export type VoicesMap = Record<string, TtsVoice>;
@@ -87,6 +112,23 @@ export interface AnalyzeProgress {
   /** Сколько из них уже разобрано. */
   done: number;
 }
+
+/** Номер этапа для бейджа: 1 — страницы, 2 — сжатие, 3 — анализ, 4 — озвучка, 5 — готово. */
+export const MANGA_STEPS_TOTAL = 5;
+
+const STEP_NAMES: Record<MangaPhase, string> = {
+  idle: "Страницы добавлены",
+  preparing: "Сжатие страниц",
+  analyzing: "Анализ диалога",
+  voicing: "Озвучка реплик",
+};
+
+const PHASE_STEP: Record<MangaPhase, number> = {
+  idle: 1,
+  preparing: 2,
+  analyzing: 3,
+  voicing: 4,
+};
 
 /** Ответ `manga-analyze` на один батч. */
 interface AnalyzePageResult {
@@ -107,14 +149,24 @@ export function releasePage(page: Pick<MangaPage, "url" | "audio">) {
   }
 }
 
-/** Ответ модели → поля страницы: пустые значения не затирают прежние. */
+/**
+ * Ответ модели → поля страницы.
+ *
+ * `transcript` сразу приводится к формату из промпта: только реплики
+ * «Speaker 1: …» с пустой строкой между ними — описания сцены, «Рассказчик: …»
+ * и markdown модель добавляет вопреки инструкциям, поэтому их вырезает
+ * `normalizeModelTranscript`. `description` сохраняем (она держит стабильные
+ * номера персонажей между страницами), но в диалоге не показываем.
+ */
 function applyAnalyzeResult(page: MangaPage, item: AnalyzePageResult | undefined): MangaPage {
   if (!item) return { ...page, status: "new" };
+  const raw = item.transcript ?? "";
   return {
     ...page,
     status: "ready",
     description: item.description ?? "",
-    transcript: item.transcript ?? "",
+    transcript: normalizeModelTranscript(raw) || formatTranscript(raw),
+    voiceError: undefined,
   };
 }
 
@@ -128,6 +180,12 @@ export function useMangaVoice() {
   /** id страницы, которая озвучивается прямо сейчас. */
   const [speakingId, setSpeakingId] = useState<string | null>(null);
   const [error, setError] = useState("");
+  /** Последняя неудача целиком: этап, причина, код — для диагностики в UI. */
+  const [failure, setFailure] = useState<MangaFailure | null>(null);
+  /** Этап процесса для кольца-прогресса. */
+  const [phase, setPhase] = useState<MangaPhase>("idle");
+  /** Прогресс озвучки очереди («Озвучить всё»). */
+  const [speakProgress, setSpeakProgress] = useState<{ done: number; total: number } | null>(null);
   /** id страницы + url озвучки, которую запустили только что (для autoPlay). */
   const [autoPlayKey, setAutoPlayKey] = useState<string | null>(null);
 
@@ -218,20 +276,25 @@ export function useMangaVoice() {
     setSpeakingId(null);
     setAutoPlayKey(null);
     setError("");
+    setFailure(null);
+    setPhase("idle");
+    setSpeakProgress(null);
   }, []);
 
   /* ------------------------------------------------------------------ */
   /* Ошибки и остановка                                                  */
   /* ------------------------------------------------------------------ */
 
-  /**
-   * Единая точка сообщения об ошибке: причина показывается и в модалке, и в
-   * toast (окно может быть закрыто, а ответ — нет).
+/**
+   * Единая точка сообщения об ошибке: полный текст («Ошибка запроса api
+   * (этап: причина)») уходит в плашку и в toast — окно может быть закрыто,
+   * а ответ нет. Этап и причина сохраняются отдельно для диагностики в UI.
    */
-  const reportFailure = useCallback((message: string, fallback: string) => {
-    const text = message || fallback;
-    setError(text);
-    toast.error(text);
+  const reportFailure = useCallback((next: MangaFailure) => {
+    setFailure(next);
+    setError(next.message);
+    toast.error(next.message);
+    return next;
   }, []);
 
   /**
@@ -248,6 +311,8 @@ export function useMangaVoice() {
     setAnalyzeProgress(null);
     setSpeakingId(null);
     setAutoPlayKey(null);
+    setPhase("idle");
+    setSpeakProgress(null);
     announceStopSpeech();
   }, []);
 
@@ -279,6 +344,8 @@ export function useMangaVoice() {
     stoppedRef.current = false;
     setIsAnalyzing(true);
     setError("");
+    setFailure(null);
+    setPhase("preparing");
     setAnalyzeProgress({ preparing: true, batch: 1, batches: 1, total: queue.length, done: 0 });
 
     const runId = (runIdRef.current += 1);
@@ -293,14 +360,13 @@ export function useMangaVoice() {
     let done = 0;
 
     try {
-      // Готовим всё тело заранее: страницы уменьшаются до 1600 px и пережимаются,
-      // а батчи режутся уже по фактическому размеру payload, а не «на глаз».
-      // Иначе 5 сканов по 1.5 МБ — это ~10 МБ в одном POST: такой запрос чаще
-      // всего и заканчивается сетевым сбоем («Failed to fetch»).
+      // Этап 2 — сжатие: страницы уменьшаются до 1600 px и пережимаются, батчи
+      // режутся по фактическому размеру payload, а не «на глаз».
       const payload = await prepareAnalyzePayload(queue);
       if (stoppedRef.current || controller.signal.aborted) return failures.length === 0;
 
       const batches = planAnalyzeBatches(payload);
+      setPhase("analyzing");
 
       for (let i = 0; i < batches.length; i += 1) {
         if (stoppedRef.current || controller.signal.aborted) break;
@@ -310,6 +376,7 @@ export function useMangaVoice() {
         setAnalyzeProgress({ batch: i + 1, batches: batches.length, total: queue.length, done });
 
         try {
+          // Этап 3 — запрос к api анализа манги.
           const data = await edgeJson<{ pages?: AnalyzePageResult[] }>(
             MANGA_ANALYZE_FN,
             { images: batch.images },
@@ -329,22 +396,24 @@ export function useMangaVoice() {
         } catch (e) {
           if (isAbortError(e, controller.signal)) break;
           console.error("manga-analyze error:", e);
-          const reason = e instanceof Error ? e.message : "Ошибка анализа";
-          failures.push(reason);
+          const failure = classifyEdgeFailure(e, "analyze-api", "сервер не вернул страницы");
+          failures.push(failure.message);
           reportFailure(
-            batches.length > 1 ? `Батч ${i + 1} из ${batches.length}: ${reason}` : reason,
-            "Ошибка анализа страниц"
+            batches.length > 1
+              ? mangaFailure(failure.stage, `батч ${i + 1} из ${batches.length} — ${failure.reason}`, failure.status)
+              : failure
           );
           // Страницы этого батча возвращаются в очередь — их можно отправить снова.
           updatePages((prev) => prev.map((p) => (batchIds.includes(p.id) ? { ...p, status: "new" } : p)));
         }
       }
     } catch (e) {
-      // Подготовка тела (чтение/сжатие файлов) — тоже часть запроса.
+      // Этап 1–2: чтение файла или сжатие — до сети дело не дошло.
       if (!isAbortError(e, controller.signal)) {
         console.error("manga-analyze prepare error:", e);
-        failures.push(e instanceof Error ? e.message : "Ошибка подготовки страниц");
-        reportFailure(failures[0], "Не удалось подготовить страницы к анализу");
+        const failure = classifyPrepareFailure(e, queue[0]?.file?.name);
+        failures.push(failure.message);
+        reportFailure(failure);
       }
     } finally {
       // Всё, что осталось «в анализе» (остановка или сбой), возвращается в `new`.
@@ -356,7 +425,11 @@ export function useMangaVoice() {
         setAnalyzeProgress(null);
         abortRef.current = null;
         runningRef.current = false;
-        if (stoppedRef.current) setError("");
+        setPhase("idle");
+        if (stoppedRef.current) {
+          setError("");
+          setFailure(null);
+        }
       }
     }
 
@@ -370,8 +443,23 @@ export function useMangaVoice() {
 
   /** Запрашивает озвучку одной страницы и кладёт audio-URL в состояние. */
   const requestVoice = useCallback(async (page: MangaPage, plan: TranscriptPlan, signal: AbortSignal) => {
-    const blob = await edgeBlob(DIALOG_TTS_FN, { transcript: plan.text, voices: voicesRef.current }, signal);
-    const url = URL.createObjectURL(blob);
+    setPhase("voicing");
+    let blob: Blob;
+    try {
+      // Этап 4 — запрос к api озвучки: нормализованный диалог + карта голосов.
+      blob = await edgeBlob(DIALOG_TTS_FN, { transcript: plan.text, voices: voicesRef.current }, signal);
+    } catch (e) {
+      if (isAbortError(e, signal)) throw e;
+      // Сервер ответил, но вместо аудио пришёл мусор — это этап обработки аудио.
+      throw classifyEdgeFailure(e, "tts-api", "сервер не вернул аудио");
+    }
+
+    let url: string;
+    try {
+      url = URL.createObjectURL(blob);
+    } catch (e) {
+      throw mangaFailure("tts-decode", e instanceof Error ? e.message : "браузер не смог создать ссылку на аудио");
+    }
     let released = false;
     updatePages((prev) =>
       prev.map((p) => {
@@ -400,14 +488,18 @@ export function useMangaVoice() {
 
       const plan = planTranscript(page.transcript ?? "");
       if (plan.problems.length) {
-        // Сервер на таком тексте ответит 400 — показываем причину заранее.
-        setError(plan.problems[0]);
+        // Сервер на таком тексте ответит 400 — показываем причину заранее и
+        // честно называем этап: это проверка реплик, а не сбой запроса.
+        const failure = dialogCheckFailure(plan.problems[0]);
+        updatePages((prev) => prev.map((p) => (p.id === page.id ? { ...p, voiceError: failureTitle(failure) } : p)));
+        reportFailure(failure);
         return false;
       }
 
       stoppedRef.current = false;
       setSpeakingId(page.id);
       setError("");
+      setFailure(null);
       announceStopSpeech();
 
       const runId = (runIdRef.current += 1);
@@ -420,17 +512,19 @@ export function useMangaVoice() {
       } catch (e) {
         if (isAbortError(e, controller.signal)) {
           setError("");
+          setFailure(null);
           return false;
         }
         console.error("dialog-tts error:", e);
-        const reason = e instanceof Error ? e.message : "Ошибка озвучки";
-        updatePages((prev) => prev.map((p) => (p.id === page.id ? { ...p, voiceError: reason } : p)));
-        reportFailure(reason, "Ошибка озвучки");
+        const failure = isMangaFailure(e) ? e : classifyEdgeFailure(e, "tts-api", "озвучка не удалась");
+        updatePages((prev) => prev.map((p) => (p.id === page.id ? { ...p, voiceError: failureTitle(failure) } : p)));
+        reportFailure(failure);
         return false;
       } finally {
         if (runIdRef.current === runId) {
           setSpeakingId(null);
           abortRef.current = null;
+          setPhase("idle");
         }
       }
     },
@@ -449,16 +543,20 @@ export function useMangaVoice() {
 
     stoppedRef.current = false;
     setError("");
+    setFailure(null);
+    setPhase("voicing");
     announceStopSpeech();
 
     const runId = (runIdRef.current += 1);
     const controller = new AbortController();
     abortRef.current = controller;
-    const failed: { page: MangaPage; reason: string }[] = [];
+    const failed: { page: MangaPage; failure: MangaFailure }[] = [];
     let stopped = false;
+    let voiced = 0;
 
     try {
-      for (const page of queue) {
+      for (let i = 0; i < queue.length; i += 1) {
+        const page = queue[i];
         if (stoppedRef.current || controller.signal.aborted) {
           stopped = true;
           break;
@@ -466,36 +564,45 @@ export function useMangaVoice() {
 
         const plan = planTranscript(page.transcript ?? "");
         if (plan.problems.length) {
-          failed.push({ page, reason: plan.problems[0] });
+          // Реплики не примет dialog-tts: запрос не уходит, причина — на кадре.
+          const failure = dialogCheckFailure(plan.problems[0]);
+          failed.push({ page, failure });
           updatePages((prev) =>
-            prev.map((p) => (p.id === page.id ? { ...p, voiceError: plan.problems[0] } : p))
+            prev.map((p) => (p.id === page.id ? { ...p, voiceError: failureTitle(failure) } : p))
           );
+          setSpeakProgress({ done: i + 1, total: queue.length });
           continue;
         }
 
         setSpeakingId(page.id);
+        setSpeakProgress({ done: i, total: queue.length });
         try {
           await requestVoice(page, plan, controller.signal);
+          voiced += 1;
         } catch (e) {
           if (isAbortError(e, controller.signal)) {
             stopped = true;
             break;
           }
           console.error("dialog-tts error:", e);
-          const reason = e instanceof Error ? e.message : "Ошибка озвучки";
-          failed.push({ page, reason });
-          updatePages((prev) => prev.map((p) => (p.id === page.id ? { ...p, voiceError: reason } : p)));
+          const failure = isMangaFailure(e) ? e : classifyEdgeFailure(e, "tts-api", "озвучка не удалась");
+          failed.push({ page, failure });
+          updatePages((prev) => prev.map((p) => (p.id === page.id ? { ...p, voiceError: failureTitle(failure) } : p)));
         }
+        setSpeakProgress({ done: i + 1, total: queue.length });
       }
     } finally {
       if (runIdRef.current === runId) {
         setSpeakingId(null);
         abortRef.current = null;
+        setSpeakProgress(null);
+        setPhase("idle");
       }
     }
 
     if (stopped || stoppedRef.current || controller.signal.aborted) {
       setError("");
+      setFailure(null);
       return false;
     }
 
@@ -503,15 +610,19 @@ export function useMangaVoice() {
       const indexById = new Map(queue.map((p, i) => [p.id, i + 1]));
       const first = failed[0];
       const where = indexById.get(first.page.id);
-      const message =
+      const summary =
         failed.length === 1
-          ? `Не озвучена страница ${where ?? ""}: ${first.reason}`.replace(" : ", ": ")
-          : `Не озвучено страниц: ${failed.length}. ${first.reason}`;
-      reportFailure(message, "Ошибка озвучки");
+          ? mangaFailure(first.failure.stage, `страница ${where} — ${first.failure.reason}`, first.failure.status)
+          : mangaFailure(
+              first.failure.stage,
+              `${failed.length} страницы из ${queue.length} не озвучены; первая — страница ${where}: ${first.failure.reason}`,
+              first.failure.status
+            );
+      reportFailure(summary);
       return false;
     }
 
-    return true;
+    return voiced > 0;
   }, [reportFailure, requestVoice, updatePages]);
 
   /* ------------------------------------------------------------------ */
@@ -538,6 +649,51 @@ export function useMangaVoice() {
   /** Любой запрос в полёте — можно показывать кнопку «Стоп». */
   const isRequesting = isAnalyzing || speakingId !== null;
 
+  /**
+   * Что происходит сейчас — для кольца-прогресса и бейджа этапа.
+   * Проценты считаются от фактической работы: подготовка страниц — 10%,
+   * анализ распределяется по батчам, озвучка — по страницам очереди.
+   */
+  const progress = useMemo<MangaProgress>(() => {
+    const step = PHASE_STEP[phase];
+    const label = `Этап ${step} из ${MANGA_STEPS_TOTAL} · ${STEP_NAMES[phase]}`;
+
+    if (phase === "preparing") {
+      return { phase, percent: 10, label, detail: "готовим изображения к отправке" };
+    }
+
+    if (phase === "analyzing" && analyzeProgress) {
+      const perBatch = 80 / Math.max(1, analyzeProgress.batches);
+      const percent = Math.min(90, Math.round(10 + perBatch * (analyzeProgress.batch - 1) + 4));
+      return {
+        phase,
+        percent,
+        label,
+        detail: `Батч ${analyzeProgress.batch} из ${analyzeProgress.batches} · обработано ${analyzeProgress.done} из ${analyzeProgress.total} страниц`,
+      };
+    }
+
+    if (phase === "voicing") {
+      const total = speakProgress?.total ?? 0;
+      const done = speakProgress?.done ?? 0;
+      const percent = total > 0 ? Math.min(99, Math.round(10 + (85 * done) / total)) : 55;
+      return {
+        phase,
+        percent,
+        label,
+        detail: total > 1 ? `Озвучено ${done} из ${total} страниц` : "синтезируем реплики",
+      };
+    }
+
+    const percent = pendingCount === 0 && readyPages.length > 0 ? 100 : Math.round((readyPages.length / Math.max(1, pages.length)) * 100);
+    return {
+      phase,
+      percent,
+      label: pages.length === 0 ? `Этап ${step} из ${MANGA_STEPS_TOTAL} · Добавьте страницы` : label,
+      detail: pendingCount ? `Осталось разобрать: ${pendingCount}` : readyPages.length ? "Всё готово" : undefined,
+    };
+  }, [analyzeProgress, pages.length, pendingCount, phase, readyPages.length, speakProgress]);
+
   return {
     pages,
     voices,
@@ -549,6 +705,9 @@ export function useMangaVoice() {
     speakingId,
     isRequesting,
     error,
+    failure,
+    phase,
+    progress,
     autoPlayKey,
     defaultVoiceFor,
     addFiles,

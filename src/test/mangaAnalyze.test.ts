@@ -122,6 +122,32 @@ describe("upstreamErrorMessage", () => {
   });
 });
 
+describe("system prompt: формат ответа модели", () => {
+  it("требует только JSON с description и transcript", () => {
+    expect(indexSource).toContain('{"pages":[{"description":"...","transcript":"..."}]}');
+    expect(indexSource).toContain("Ровно один элемент pages на каждое изображение");
+  });
+
+  it("показывает формат на конкретном примере, а не на «Speaker N»", () => {
+    expect(indexSource).toContain("Speaker 1: Ребята, начинаем?");
+    expect(indexSource).toContain("Speaker 2: Я сказала тебе прекратить!");
+    expect(indexSource).toContain("Speaker 3: Ладно, ладно, понял.");
+    expect(indexSource).toContain("Speaker 4: Вы оба довольно забавные.");
+    expect(indexSource).toContain("номер — реальная цифра, не буква N");
+  });
+
+  it("запрещает лишний текст в репликах", () => {
+    expect(indexSource).toContain("между репликами одна пустая строка");
+    expect(indexSource).toContain("никаких описаний, комментариев");
+    expect(indexSource).toContain("в transcript его текст попадать не должен");
+    expect(indexSource).toContain("максимум 8 персонажей");
+  });
+
+  it("description остаётся в JSON — он держит номера персонажей между страницами", () => {
+    expect(indexSource).toContain("номера одного и того же персонажа одинаковы на всех страницах");
+  });
+});
+
 describe("стражи index.ts и деплоя", () => {
   it("функция использует вынесенную валидацию и разбор", () => {
     expect(indexSource).toContain("validateImages(images)");

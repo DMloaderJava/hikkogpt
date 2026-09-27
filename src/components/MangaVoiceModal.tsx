@@ -3,20 +3,48 @@
  *
  * Вся работа с запросами и состоянием страниц живёт в `useMangaVoice` — хук
  * построен по образцу `useChat` (отправка сообщения): единые заголовки и
- * обработка ошибок, `AbortController` с кнопкой «Стоп», понятные причины отказа
- * в плашке и в toast. Компонент здесь отвечает только за представление.
+ * обработка ошибок, `AbortController` с кнопкой «Стоп», точная причина сбоя
+ * («Ошибка запроса api (этап: причина)») в плашке и в toast. Компонент здесь
+ * отвечает за представление и за то, чтобы процесс было видно: кольцо-прогресс
+ * с орбитой этапов, бейдж «Этап N из 5», плавное появление карточек.
+ *
+ * Раскладка кадра: реплики → плеер с озвучкой → страница поверх (изображение
+ * остаётся главным элементом кадра).
  */
 
-import { useEffect } from "react";
-import { BookOpen, Loader2, Square, Trash2, Volume2, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { BookOpen, Loader2, Pencil, Square, Trash2, Volume2, X } from "lucide-react";
 import { AudioPlayer } from "@/components/AudioPlayer";
-import { useMangaVoice } from "@/hooks/useMangaVoice";
+import { MangaProgressRing } from "@/components/MangaProgress";
+import { MANGA_STEPS_TOTAL, useMangaVoice, type MangaPage } from "@/hooks/useMangaVoice";
 import { ACCEPTED_PAGE_ACCEPT, ANALYZE_BATCH_SIZE } from "@/lib/mangaPages";
 import { MAX_TTS_SPEAKERS, TTS_VOICES, planTranscript, type TtsVoice } from "@/lib/mangaTranscript";
+import type { STAGE_LABELS } from "@/lib/mangaRequestError";
 
 interface MangaVoiceModalProps {
   open: boolean;
   onClose: () => void;
+}
+
+/** Реплики страницы как диалог по ролям: «Speaker 1» + текст + чей голос. */
+function DialogLines({ page, voices }: { page: MangaPage; voices: Record<string, TtsVoice> }) {
+  const plan = planTranscript(page.transcript ?? "");
+  if (!plan.lines.length) return null;
+
+  return (
+    <div className="manga-dialog" data-testid={`manga-dialog-${page.id}`}>
+      {plan.lines.map((line, i) => (
+        <div className="manga-dialog-line" key={`${line.speaker}-${i}`} style={{ animationDelay: `${Math.min(i, 8) * 30}ms` }}>
+          <span className="manga-dialog-speaker">
+            Speaker {line.speaker}
+            {plan.names[line.speaker] ? ` · ${plan.names[line.speaker]}` : ""}
+          </span>
+          <span className="manga-dialog-text">{line.text}</span>
+          <span className="sr-only">Голос: {voices[String(line.speaker)] ?? TTS_VOICES[(line.speaker - 1) % TTS_VOICES.length]}</span>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
@@ -31,6 +59,8 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
     speakingId,
     isRequesting,
     error,
+    failure,
+    progress,
     autoPlayKey,
     addFiles,
     removePage,
@@ -41,6 +71,9 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
     speakAll,
     stop,
   } = useMangaVoice();
+
+  /** Какие страницы правятся вручную (после озвучки textarea скрыт). */
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   // Закрытие окна останавливает запросы и глушит звук: ничего не должно
   // озвучиваться «в пустоту» (тот же принцип, что и stopStreaming в чате).
@@ -80,6 +113,8 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
       : `Анализировать страницы ${from}–${to}`;
   })();
 
+  const stageBadge = `ЭТАП ${progress.label.match(/Этап (\d+)/)?.[1] ?? 1} / ${MANGA_STEPS_TOTAL}`;
+
   return (
     <div
       className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-background/70 backdrop-blur-sm animate-fade-in p-0 sm:p-4"
@@ -91,23 +126,32 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
         data-testid="manga-modal"
         className="w-full sm:max-w-2xl max-h-[90vh] overflow-y-auto scrollbar-thin rounded-t-2xl sm:rounded-2xl border border-border bg-background p-4 shadow-xl animate-slide-up"
       >
-        <div className="mb-3 flex items-center justify-between">
+        <div className="mb-3 flex items-center justify-between gap-2">
           <h2 className="flex items-center gap-2 text-base font-semibold text-foreground">
             <BookOpen className="h-4 w-4 text-interactive" />
             Озвучиватель манги
           </h2>
-          <button
-            onClick={onClose}
-            aria-label="Закрыть"
-            className="btn-interactive rounded-lg p-1.5 text-muted-foreground transition-all"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <div className="flex items-center gap-2">
+            <span
+              data-testid="manga-stage"
+              className="rounded-full border border-border px-2.5 py-1 text-[10px] tracking-[0.12em] text-muted-foreground"
+            >
+              {stageBadge}
+            </span>
+            <button
+              onClick={onClose}
+              aria-label="Закрыть"
+              className="btn-interactive rounded-lg p-1.5 text-muted-foreground transition-all"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
 
         <p className="mb-2 text-xs text-muted-foreground">
           Загрузите страницы по порядку — они разбираются батчами по {ANALYZE_BATCH_SIZE} изображений
-          за одно нажатие. Каждая страница получит описание, реплики и отдельную озвучку.
+          за одно нажатие. Модель возвращает только реплики вида «Speaker 1: …», каждая страница
+          получает свою озвучку.
         </p>
 
         <input
@@ -123,8 +167,18 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
           className="w-full text-sm"
         />
 
+        <div className="my-3">
+          <MangaProgressRing
+            percent={progress.percent}
+            label={progress.label}
+            detail={progress.detail}
+            active={isRequesting}
+            phase={progress.phase}
+          />
+        </div>
+
         {pages.length > 0 && (
-          <div className="my-3 flex flex-wrap items-center gap-2">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
             <button
               data-testid="manga-analyze"
               disabled={isAnalyzing || pendingCount === 0}
@@ -161,21 +215,20 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
           </div>
         )}
 
-        {isAnalyzing && analyzeProgress && !analyzeProgress.preparing && analyzeProgress.batches > 1 && (
-          <p className="mb-3 text-[11px] text-muted-foreground">
-            Батч {analyzeProgress.batch} из {analyzeProgress.batches} · обработано {analyzeProgress.done} из{" "}
-            {analyzeProgress.total} страниц
-          </p>
-        )}
-
         {error && (
-          <p role="alert" className="mb-3 rounded-xl bg-destructive/10 px-3 py-2 text-xs text-destructive">
-            {error}
-          </p>
+          <div role="alert" className="mb-3 rounded-xl bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            <p data-testid="manga-error">{error}</p>
+            {failure && (
+              <p className="mt-1 text-[11px] text-destructive/80" data-testid="manga-error-stage">
+                Этап: {failure.stage}
+                {failure.status ? ` · код ответа ${failure.status}` : ""}
+              </p>
+            )}
+          </div>
         )}
 
         {chapter.speakers.length > 0 && (
-          <div className="mb-4 rounded-xl border border-border bg-secondary/40 p-3">
+          <div className="mb-4 rounded-xl border border-border bg-secondary/40 p-3 animate-fade-in-up">
             <p className="mb-2 text-xs font-medium text-foreground">Голоса персонажей</p>
             <div className="grid grid-cols-2 gap-2">
               {chapter.speakers.map((speaker) => (
@@ -209,8 +262,14 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
           {pages.map((page, i) => {
             const plan = planTranscript(page.transcript ?? "");
             const busyWithPage = speakingId === page.id;
+            const voiced = !!page.audio;
             return (
-              <div key={page.id} data-testid={`manga-page-${i + 1}`} className="rounded-xl border border-border p-3">
+              <div
+                key={page.id}
+                data-testid={`manga-page-${i + 1}`}
+                className={`manga-page-card rounded-xl border border-border p-3 animate-fade-in-up ${voiced ? "is-voiced" : ""}`}
+                style={{ animationDelay: `${Math.min(i, 8) * 40}ms` }}
+              >
                 <div className="mb-2 flex items-center justify-between">
                   <p className="text-sm font-medium text-foreground">Страница {i + 1}</p>
                   <button
@@ -222,11 +281,14 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
                   </button>
                 </div>
 
-                <img
-                  src={page.url}
-                  alt={`Страница манги ${i + 1}`}
-                  className="max-h-96 w-full rounded-lg object-contain"
-                />
+                {/* Превью страницы: пока кадр ещё не озвучен. */}
+                {!voiced && (
+                  <img
+                    src={page.url}
+                    alt={`Страница манги ${i + 1}`}
+                    className="max-h-96 w-full rounded-lg object-contain"
+                  />
+                )}
 
                 {page.status === "analyzing" && (
                   <p className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
@@ -236,17 +298,8 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
 
                 {page.status === "ready" && (
                   <>
-                    {page.description && <p className="my-2 text-sm text-muted-foreground">{page.description}</p>}
-
-                    <textarea
-                      data-testid={`manga-transcript-${i + 1}`}
-                      aria-label={`Реплики страницы ${i + 1}`}
-                      value={page.transcript ?? ""}
-                      placeholder={"Аки: Ты опоздал\nРассказчик: Он всегда опаздывал."}
-                      onChange={(e) => setTranscript(page.id, e.target.value)}
-                      rows={4}
-                      className="w-full resize-none rounded-lg border border-border bg-secondary/50 p-2 text-sm text-foreground focus:border-interactive/40 focus:outline-none transition-all"
-                    />
+                    {/* Реплики: диалог по ролям, та же разметка, что уходит в озвучку. */}
+                    <DialogLines page={page} voices={voices} />
 
                     {plan.problems.length > 0 && (
                       <p className="mt-1.5 text-[11px] text-destructive">{plan.problems[0]}</p>
@@ -259,20 +312,50 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
 
                     {page.voiceError && (
                       <p data-testid={`manga-voice-error-${i + 1}`} className="mt-1.5 text-[11px] text-destructive">
-                        Озвучка не удалась: {page.voiceError}
+                        {page.voiceError}
                       </p>
                     )}
+
+                    {/* Правка реплик: textarea всегда в DOM (скрыт, пока не правим). */}
+                    <div
+                      className={voiced && editingId !== page.id ? "hidden" : "mt-2"}
+                      data-testid={`manga-transcript-wrap-${i + 1}`}
+                    >
+                      <textarea
+                        data-testid={`manga-transcript-${i + 1}`}
+                        aria-label={`Реплики страницы ${i + 1}`}
+                        value={page.transcript ?? ""}
+                        placeholder={"Speaker 1: Ты опоздал\n\nSpeaker 2: Он всегда опаздывал."}
+                        onChange={(e) => setTranscript(page.id, e.target.value)}
+                        rows={4}
+                        className="w-full resize-none rounded-lg border border-border bg-secondary/50 p-2 text-sm text-foreground focus:border-interactive/40 focus:outline-none transition-all"
+                      />
+                    </div>
 
                     <div className="mt-2 flex flex-wrap items-center gap-2">
                       <button
                         data-testid={`manga-speak-${i + 1}`}
                         disabled={isRequesting || plan.problems.length > 0}
-                        onClick={() => void speakPage(page.id)}
+                        onClick={() => {
+                          setEditingId(null);
+                          void speakPage(page.id);
+                        }}
                         className="flex items-center gap-2 rounded-lg bg-interactive px-3 py-2 text-sm text-interactive-foreground transition-all disabled:opacity-50"
                       >
                         {busyWithPage ? <Loader2 className="h-4 w-4 animate-spin" /> : <Volume2 className="h-4 w-4" />}
-                        {page.audio ? "Переозвучить кадр" : "Озвучить кадр"}
+                        {voiced ? "Переозвучить кадр" : "Озвучить кадр"}
                       </button>
+
+                      {voiced && (
+                        <button
+                          data-testid={`manga-edit-${i + 1}`}
+                          onClick={() => setEditingId(editingId === page.id ? null : page.id)}
+                          className="flex items-center gap-1.5 rounded-lg bg-secondary/60 px-3 py-2 text-xs text-muted-foreground transition-all hover:text-foreground"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                          {editingId === page.id ? "Скрыть правку" : "Править реплики"}
+                        </button>
+                      )}
 
                       {busyWithPage && (
                         <button
@@ -287,17 +370,28 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
                       )}
                     </div>
 
-                    {page.audio && (
-                      <div className="mt-3">
+                    {/* Озвучка кадра — сразу под репликами. */}
+                    {voiced && (
+                      <div className="mt-3 animate-scale-in">
                         <AudioPlayer
-                          src={page.audio}
+                          src={page.audio!}
                           fileName={`manga-page-${i + 1}.wav`}
                           autoPlay={autoPlayKey === `${page.id}:${page.audio}`}
                         />
                       </div>
                     )}
+
+                    {/* Страница поверх диалога и озвучки — главный элемент кадра. */}
+                    {voiced && (
+                      <img
+                        src={page.url}
+                        alt={`Страница манги ${i + 1}`}
+                        className="mt-3 max-h-[28rem] w-full rounded-lg object-contain animate-pop"
+                      />
+                    )}
                   </>
                 )}
+
               </div>
             );
           })}

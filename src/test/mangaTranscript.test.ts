@@ -6,6 +6,9 @@ import {
   MAX_TTS_SPEAKERS,
   TTS_VOICES,
   defaultVoiceFor,
+  dialogueOnly,
+  formatTranscript,
+  normalizeModelTranscript,
   parseTranscriptLines,
   planTranscript,
 } from "@/lib/mangaTranscript";
@@ -134,5 +137,72 @@ describe("голоса", () => {
     expect(defaultVoiceFor(9)).toBe("Charon");
     expect(TTS_VOICES).toEqual(["Charon", "Kore", "Puck", "Aoede", "Fenrir", "Leda", "Zephyr", "Orus"]);
     for (const voice of TTS_VOICES) expect(dialogTtsSource).toContain(voice);
+  });
+});
+
+describe("dialogueOnly: только реплики из ответа модели", () => {
+  it("оставляет «Speaker N: …» и пустые строки между ними убирает", () => {
+    const raw = "Speaker 1: Ребята, начинаем?\n\nSpeaker 2: Я сказала тебе прекратить!";
+    expect(dialogueOnly(raw)).toBe("Speaker 1: Ребята, начинаем?\nSpeaker 2: Я сказала тебе прекратить!");
+  });
+
+  it("вырезает описание сцены, заборы кода и служебные подписи", () => {
+    const raw = [
+      "```json",
+      "Описание: сцена у ворот академии.",
+      "Speaker 1: Ребята, начинаем?",
+      "Примечание: кадр 3",
+      "[Кадр 1] Денджи бежит",
+      "Speaker 2: Я сказала тебе прекратить!",
+      "```",
+    ].join("\n");
+
+    expect(dialogueOnly(raw)).toBe("Speaker 1: Ребята, начинаем?\nSpeaker 2: Я сказала тебе прекратить!");
+  });
+
+  it("строка без автора остаётся за предыдущим персонажем", () => {
+    const raw = "Speaker 1: Ты опоздал\nснова опоздал\nSpeaker 2: Не моя вина";
+    expect(dialogueOnly(raw)).toBe("Speaker 1: Ты опоздал снова опоздал\nSpeaker 2: Не моя вина");
+  });
+
+  it("если явных номеров нет — реплики с именами сохраняются", () => {
+    const raw = "Аки: Ты опоздал\nРассказчик: Он всегда опаздывал.";
+    expect(dialogueOnly(raw)).toBe(raw);
+  });
+
+  it("при явных номерах чужие имена не подмешиваются", () => {
+    const raw = "Speaker 1: Привет\nРассказчик: Токио\nSpeaker 2: Пока";
+    expect(dialogueOnly(raw)).toBe("Speaker 1: Привет\nSpeaker 2: Пока");
+  });
+
+  it("из пустого и служебного текста не получается диалог", () => {
+    expect(dialogueOnly("")).toBe("");
+    expect(dialogueOnly("Описание: ничего не происходит")).toBe("");
+  });
+});
+
+describe("formatTranscript: формат из примера", () => {
+  it("между репликами ровно одна пустая строка", () => {
+    expect(formatTranscript("Speaker 1: Ребята, начинаем?\nSpeaker 2: Я сказала тебе прекратить!")).toBe(
+      "Speaker 1: Ребята, начинаем?\n\nSpeaker 2: Я сказала тебе прекратить!"
+    );
+  });
+
+  it("лишние пустые строки и пробелы схлопываются", () => {
+    expect(formatTranscript("  Speaker 1: раз  \n\n\n\n  Speaker 2: два")).toBe("Speaker 1: раз\n\nSpeaker 2: два");
+  });
+
+  it("normalizeModelTranscript = вырезать лишнее + формат примера", () => {
+    const raw = "Описание: кадр.\nSpeaker 1: Ребята, начинаем?\nSpeaker 2: Я сказала тебе прекратить!";
+    expect(normalizeModelTranscript(raw)).toBe(
+      "Speaker 1: Ребята, начинаем?\n\nSpeaker 2: Я сказала тебе прекратить!"
+    );
+  });
+
+  it("формат с пустыми строками не ломает озвучку", () => {
+    const plan = planTranscript(formatTranscript("Speaker 1: раз\nSpeaker 2: два\nSpeaker 3: три"));
+    expect(plan.problems).toHaveLength(0);
+    expect(plan.text).toBe("Speaker 1: раз\nSpeaker 2: два\nSpeaker 3: три");
+    expect(plan.speakers).toEqual([1, 2, 3]);
   });
 });
