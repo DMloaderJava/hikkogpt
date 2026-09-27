@@ -1,4 +1,6 @@
-import { X, Volume2, Moon, Sun, LogOut, Bell, BellOff } from "lucide-react";
+import { X, Volume2, Moon, Sun, LogOut, Bell, BellOff, KeyRound } from "lucide-react";
+import { ProviderSelector } from "@/components/ProviderSelector";
+import type { AiProvider } from "@/types/ai-provider";
 
 const TTS_VOICES = [
   { id: "Aoede", label: "Aoede", desc: "Женский голос" },
@@ -20,9 +22,11 @@ interface SettingsPanelProps {
   userEmail?: string;
   soundsEnabled?: boolean;
   onToggleSounds?: () => void;
+  aiProvider?: AiProvider;
+  onProviderChange?: (p: AiProvider) => void;
 }
 
-export function SettingsPanel({ open, onClose, isDark, onToggleTheme, ttsVoice, onVoiceChange, onSignOut, userEmail, soundsEnabled = true, onToggleSounds }: SettingsPanelProps) {
+export function SettingsPanel({ open, onClose, isDark, onToggleTheme, ttsVoice, onVoiceChange, onSignOut, userEmail, soundsEnabled = true, onToggleSounds, aiProvider = "lovable", onProviderChange }: SettingsPanelProps) {
   if (!open) return null;
 
   return (
@@ -73,6 +77,20 @@ export function SettingsPanel({ open, onClose, isDark, onToggleTheme, ttsVoice, 
               <span>{soundsEnabled ? "Звуки включены" : "Звуки выключены"}</span>
               {soundsEnabled ? <Bell className="h-4 w-4 text-interactive" /> : <BellOff className="h-4 w-4 text-muted-foreground" />}
             </button>
+          </div>
+        )}
+
+        {/* AI Provider */}
+        {onProviderChange && (
+          <div className="mb-4">
+            <div className="mb-2 flex items-center gap-1.5">
+              <KeyRound className="h-3.5 w-3.5 text-muted-foreground" />
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">API-провайдер для чата</p>
+            </div>
+            <ProviderSelector value={aiProvider} onChange={onProviderChange} variant="full" />
+            <p className="mt-1.5 text-[11px] text-muted-foreground">
+              Если выбранный провайдер недоступен, запрос автоматически пойдёт через запасной.
+            </p>
           </div>
         )}
 

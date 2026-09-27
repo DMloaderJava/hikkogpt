@@ -5,91 +5,224 @@ const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
+  // Фронтенд читает x-ai-provider, чтобы понять, какой провайдер реально ответил.
+  "Access-Control-Expose-Headers": "x-ai-provider",
 };
 
-// Map Lovable model id -> direct Google Gemini model id
+type AiProvider = "lovable" | "gemini";
+
+const LOVABLE_CHAT_URL = "https://ai.gateway.lovable.dev/v1/chat/completions";
+
+// Map Lovable model id -> direct Google Gemini model id.
+// Переопределяется секретом GEMINI_CHAT_MODEL (без ротации).
 function toGoogleModel(m: string): string {
-  if (m.includes("3.1-pro")) return "gemini-2.0-flash-exp";
-  if (m.includes("3-flash")) return "gemini-2.0-flash";
-  if (m.includes("2.5-pro")) return "gemini-1.5-pro";
-  if (m.includes("2.5-flash")) return "gemini-1.5-flash";
-  return "gemini-2.0-flash";
+  const override = Deno.env.get("GEMINI_CHAT_MODEL");
+  if (override) return override;
+  if (m.includes("lite")) return "gemini-2.5-flash-lite";
+  if (m.includes("pro")) return "gemini-2.5-pro";
+  return "gemini-2.5-flash";
 }
 
-async function tryGeminiFallback(aiModel: string, systemContent: string, messages: any[]): Promise<Response | null> {
+function getGeminiKeys(): string[] {
   const raw = Deno.env.get("GEMINI_API_KEYS") || "";
-  const keys = raw.split(/[\s,;\n]+/).map((k) => k.trim()).filter(Boolean);
-  if (keys.length === 0) return null;
+  return raw.split(/[\s,;\n]+/).map((k) => k.trim()).filter(Boolean);
+}
 
-  const googleModel = toGoogleModel(aiModel);
-  const contents = messages.map((m: any) => ({
-    role: m.role === "assistant" ? "model" : "user",
-    parts: [{ text: typeof m.content === "string" ? m.content : JSON.stringify(m.content) }],
-  }));
+interface GeminiPart {
+  text?: string;
+  inlineData?: { mimeType: string; data: string };
+}
 
-  const body = {
-    systemInstruction: { parts: [{ text: systemContent }] },
-    contents,
-  };
+interface GeminiContent {
+  role: "user" | "model";
+  parts: GeminiPart[];
+}
 
-  for (const key of keys) {
-    try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${googleModel}:streamGenerateContent?alt=sse&key=${key}`;
-      const resp = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (!resp.ok || !resp.body) {
-        const txt = await resp.text().catch(() => "");
-        console.warn(`Gemini key failed [${resp.status}]: ${txt.slice(0, 200)}`);
-        continue;
-      }
+/**
+ * OpenAI-формат сообщений -> формат Gemini generateContent.
+ * Поддерживает текстовые части и image_url (base64 data URL -> inlineData).
+ * Системные сообщения выносятся отдельно — Gemini принимает их
+ * через systemInstruction, а не в contents.
+ */
+function toGeminiContents(messages: any[]): { systemTexts: string[]; contents: GeminiContent[] } {
+  const systemTexts: string[] = [];
+  const raw: GeminiContent[] = [];
 
-      // Convert Gemini SSE -> OpenAI-style SSE expected by frontend
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      const encoder = new TextEncoder();
-      let buffer = "";
+  for (const m of messages) {
+    const role = m.role === "assistant" ? "model" : "user";
 
-      const stream = new ReadableStream({
-        async pull(controller) {
-          const { done, value } = await reader.read();
-          if (done) {
-            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-            controller.close();
-            return;
-          }
-          buffer += decoder.decode(value, { stream: true });
-          let idx;
-          while ((idx = buffer.indexOf("\n")) !== -1) {
-            let line = buffer.slice(0, idx);
-            buffer = buffer.slice(idx + 1);
-            if (line.endsWith("\r")) line = line.slice(0, -1);
-            if (!line.startsWith("data: ")) continue;
-            const json = line.slice(6).trim();
-            if (!json) continue;
-            try {
-              const parsed = JSON.parse(json);
-              const text = parsed?.candidates?.[0]?.content?.parts?.map((p: any) => p.text).filter(Boolean).join("") || "";
-              if (text) {
-                const chunk = { choices: [{ delta: { content: text } }] };
-                controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
-              }
-            } catch (_) { /* ignore */ }
-          }
-        },
-      });
+    const pushText = (text: string) => {
+      if (m.role === "system") systemTexts.push(text);
+      else raw.push({ role, parts: [{ text }] });
+    };
 
-      return new Response(stream, {
-        headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
-      });
-    } catch (e) {
-      console.warn("Gemini fallback key error:", e);
+    if (typeof m.content === "string") {
+      pushText(m.content);
       continue;
     }
+
+    if (Array.isArray(m.content)) {
+      const parts: GeminiPart[] = [];
+      for (const part of m.content) {
+        if (part?.type === "text" && part.text) {
+          if (m.role === "system") systemTexts.push(part.text);
+          else parts.push({ text: part.text });
+        } else if (part?.type === "image_url") {
+          const url: string = part.image_url?.url || "";
+          const match = url.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,(.+)$/);
+          if (match) {
+            parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
+          } else if (url) {
+            // Удалённые URL Gemini API не умеет скачивать сам — оставляем пометку текстом.
+            parts.push({ text: `[изображение: ${url}]` });
+          }
+        }
+      }
+      if (m.role !== "system") {
+        raw.push({ role, parts: parts.length > 0 ? parts : [{ text: "" }] });
+      }
+      continue;
+    }
+
+    pushText(String(m.content ?? ""));
+  }
+
+  // Gemini предпочитает чередование ролей — склеиваем соседние реплики одной роли.
+  const contents: GeminiContent[] = [];
+  for (const c of raw) {
+    const last = contents[contents.length - 1];
+    if (last && last.role === c.role) last.parts.push(...c.parts);
+    else contents.push({ role: c.role, parts: [...c.parts] });
+  }
+
+  return { systemTexts, contents };
+}
+
+/** Ответ в OpenAI-style SSE: фронтенд парсит choices[0].delta. */
+function geminiSseResponse(upstream: Response): Response {
+  const reader = upstream.body!.getReader();
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let buffer = "";
+
+  const stream = new ReadableStream({
+    async pull(controller) {
+      const { done, value } = await reader.read();
+      if (done) {
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.close();
+        return;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buffer.indexOf("\n")) !== -1) {
+        let line = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 1);
+        if (line.endsWith("\r")) line = line.slice(0, -1);
+        if (!line.startsWith("data: ")) continue;
+        const json = line.slice(6).trim();
+        if (!json) continue;
+        try {
+          const parsed = JSON.parse(json);
+          const parts: any[] = parsed?.candidates?.[0]?.content?.parts || [];
+          let text = "";
+          let reasoning = "";
+          for (const p of parts) {
+            if (!p?.text) continue;
+            // thought-части (thinking) маппим в reasoning_content — UI показывает их как thinking.
+            if (p.thought) reasoning += p.text;
+            else text += p.text;
+          }
+          if (text || reasoning) {
+            const delta: Record<string, string> = {};
+            if (text) delta.content = text;
+            if (reasoning) delta.reasoning_content = reasoning;
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta }] })}\n\n`));
+          }
+        } catch (_) { /* ignore partial */ }
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: { ...corsHeaders, "Content-Type": "text/event-stream", "x-ai-provider": "gemini" },
+  });
+}
+
+/**
+ * Прямой вызов Google Generative Language API с ротацией ключей.
+ * Возвращает Response при успехе или null, если все ключи/попытки не сработали.
+ */
+async function callGeminiDirect(
+  aiModel: string,
+  systemContent: string,
+  messages: any[],
+  thinking: boolean,
+): Promise<Response | null> {
+  const keys = getGeminiKeys();
+  if (keys.length === 0) return null;
+
+  const { systemTexts, contents } = toGeminiContents(messages);
+  const fullSystem = [systemContent, ...systemTexts].filter(Boolean).join("\n\n");
+
+  // Основная модель + страховка на случай снятия модели с эксплуатации (404).
+  const candidates = [...new Set([toGoogleModel(aiModel), "gemini-2.5-flash", "gemini-2.0-flash"])];
+
+  for (const googleModel of candidates) {
+    const body: Record<string, unknown> = {
+      systemInstruction: { parts: [{ text: fullSystem }] },
+      contents,
+    };
+    if (thinking && googleModel.includes("2.5")) {
+      body.generationConfig = { thinkingConfig: { thinkingBudget: 8192 } };
+    }
+
+    let modelMissing = false;
+    for (const key of keys) {
+      try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${googleModel}:streamGenerateContent?alt=sse&key=${key}`;
+        const resp = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!resp.ok || !resp.body) {
+          const txt = await resp.text().catch(() => "");
+          console.warn(`Gemini key failed [${googleModel} ${resp.status}]: ${txt.slice(0, 200)}`);
+          // 404 = нет такой модели: перебирать остальные ключи бессмысленно, пробуем следующую модель.
+          if (resp.status === 404) {
+            modelMissing = true;
+            break;
+          }
+          continue;
+        }
+        return geminiSseResponse(resp);
+      } catch (e) {
+        console.warn("Gemini direct key error:", e);
+        continue;
+      }
+    }
+    // Ключи исчерпаны, но модель существует — другие модели не помогут (квота/ошибка запроса).
+    if (!modelMissing) return null;
   }
   return null;
+}
+
+async function callLovable(apiKey: string, body: unknown): Promise<Response> {
+  return await fetch(LOVABLE_CHAT_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+function lovableSseResponse(upstream: Response): Response {
+  return new Response(upstream.body, {
+    headers: { ...corsHeaders, "Content-Type": "text/event-stream", "x-ai-provider": "lovable" },
+  });
 }
 
 serve(async (req) => {
@@ -135,9 +268,9 @@ serve(async (req) => {
       console.warn("quota check skipped:", e);
     }
 
-    const { messages, model, thinking } = await req.json();
+    const { messages, model, thinking, provider } = await req.json();
+    const requestedProvider: AiProvider = provider === "gemini" ? "gemini" : "lovable";
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
 
     const modelMap: Record<string, string> = {
       "HikkoGPT": "google/gemini-3.1-pro-preview",
@@ -295,7 +428,7 @@ serve(async (req) => {
 
     const systemContent = systemPrompts[model] || hikkoBasePrompt;
 
-    const body: any = {
+    const lovableBody: any = {
       model: aiModel,
       messages: [
         { role: "system", content: systemContent },
@@ -306,21 +439,43 @@ serve(async (req) => {
 
     if (thinking) {
       if (aiModel.includes("gemini-2.5")) {
-        body.thinking = { type: "enabled", budget_tokens: 8192 };
+        lovableBody.thinking = { type: "enabled", budget_tokens: 8192 };
       }
     }
 
-    const response = await fetch(
-      "https://ai.gateway.lovable.dev/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${LOVABLE_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(body),
+    // === Выбран Gemini API: прямой вызов Google, запасной — Lovable ===
+    if (requestedProvider === "gemini") {
+      const direct = await callGeminiDirect(aiModel, systemContent, messages, thinking);
+      if (direct) return direct;
+
+      console.log("Direct Gemini API failed, falling back to Lovable gateway");
+      if (!LOVABLE_API_KEY) {
+        return new Response(
+          JSON.stringify({ error: "Gemini API недоступен и LOVABLE_API_KEY не настроен." }),
+          { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
       }
-    );
+      const response = await callLovable(LOVABLE_API_KEY, lovableBody);
+      if (!response.ok) {
+        const t = await response.text();
+        console.error("Lovable fallback error:", response.status, t);
+        return new Response(
+          JSON.stringify({ error: "Оба провайдера недоступны. Попробуйте позже." }),
+          { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+      return lovableSseResponse(response);
+    }
+
+    // === Выбран Lovable (дефолт): шлюз, при пустом балансе — прямой Gemini ===
+    if (!LOVABLE_API_KEY) {
+      // Ключа шлюза нет вообще — сразу пробуем прямой Gemini.
+      const direct = await callGeminiDirect(aiModel, systemContent, messages, thinking);
+      if (direct) return direct;
+      throw new Error("LOVABLE_API_KEY is not configured");
+    }
+
+    const response = await callLovable(LOVABLE_API_KEY, lovableBody);
 
     if (!response.ok) {
       if (response.status === 429) {
@@ -332,7 +487,7 @@ serve(async (req) => {
       if (response.status === 402) {
         // Fallback: try direct Google Gemini API with rotating keys
         console.log("Lovable AI balance exhausted, falling back to direct Gemini API");
-        const fallback = await tryGeminiFallback(aiModel, systemContent, messages);
+        const fallback = await callGeminiDirect(aiModel, systemContent, messages, thinking);
         if (fallback) return fallback;
         return new Response(
           JSON.stringify({ error: "Необходимо пополнить баланс." }),
@@ -347,9 +502,7 @@ serve(async (req) => {
       );
     }
 
-    return new Response(response.body, {
-      headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
-    });
+    return lovableSseResponse(response);
   } catch (e) {
     console.error("chat error:", e);
     return new Response(

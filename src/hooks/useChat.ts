@@ -3,6 +3,8 @@ import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useSounds } from "@/hooks/useSounds";
+import { AI_PROVIDERS, type AiProvider } from "@/types/ai-provider";
+import { useAiProvider } from "@/hooks/useAiProvider";
 
 export interface Message {
   id: string;
@@ -72,6 +74,7 @@ export function useChat() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [selectedModel, setSelectedModel] = useState("HikkoGPT Smart");
   const [thinkingEnabled, setThinkingEnabled] = useState(false);
+  const { provider: aiProvider, setProvider: setAiProvider } = useAiProvider();
   const [soundsEnabled, setSoundsEnabled] = useState(() => {
     if (typeof window === "undefined") return true;
     return localStorage.getItem("hikko_sounds") !== "0";
@@ -315,9 +318,16 @@ export function useChat() {
             Authorization: `Bearer ${accessToken}`,
             apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
           },
-          body: JSON.stringify({ messages: apiMessages, model: selectedModel, thinking: thinkingEnabled }),
+          body: JSON.stringify({ messages: apiMessages, model: selectedModel, thinking: thinkingEnabled, provider: aiProvider }),
           signal: controller.signal,
         });
+
+        // Сервер сообщает, какой провайдер реально обработал запрос
+        // (x-ai-provider). Если это запасной — предупреждаем пользователя.
+        const actualProvider = resp.headers.get("x-ai-provider");
+        if (resp.ok && actualProvider && actualProvider !== aiProvider && (actualProvider === "lovable" || actualProvider === "gemini")) {
+          toast.info(`Отвечаю через ${AI_PROVIDERS[actualProvider as AiProvider].label} — выбранный провайдер недоступен`);
+        }
 
         if (!resp.ok) {
           const errData = await resp.json().catch(() => ({}));
@@ -468,7 +478,7 @@ export function useChat() {
       setIsStreaming(false);
       abortRef.current = null;
     },
-    [activeChatId, chats, selectedModel, thinkingEnabled, user]
+    [activeChatId, chats, selectedModel, thinkingEnabled, aiProvider, user]
   );
 
   const stopStreaming = useCallback(() => {
@@ -485,6 +495,8 @@ export function useChat() {
     thinkingEnabled,
     soundsEnabled,
     toggleSounds,
+    aiProvider,
+    setAiProvider,
     setThinkingEnabled,
     setSelectedModel,
     setActiveChatId,
