@@ -1,5 +1,6 @@
 import { X, Volume2, Moon, Sun, LogOut, Bell, BellOff, KeyRound } from "lucide-react";
 import { ProviderSelector } from "@/components/ProviderSelector";
+import { UserApiKeysEditor } from "@/components/UserApiKeysEditor";
 import type { AiProvider } from "@/types/ai-provider";
 
 const TTS_VOICES = [
@@ -24,9 +25,14 @@ interface SettingsPanelProps {
   onToggleSounds?: () => void;
   aiProvider?: AiProvider;
   onProviderChange?: (p: AiProvider) => void;
+  userKeys?: string[];
+  activeKeyIndex?: number;
+  onAddUserKeys?: (text: string) => void;
+  onRemoveUserKey?: (index: number) => void;
+  onClearUserKeys?: () => void;
 }
 
-export function SettingsPanel({ open, onClose, isDark, onToggleTheme, ttsVoice, onVoiceChange, onSignOut, userEmail, soundsEnabled = true, onToggleSounds, aiProvider = "lovable", onProviderChange }: SettingsPanelProps) {
+export function SettingsPanel({ open, onClose, isDark, onToggleTheme, ttsVoice, onVoiceChange, onSignOut, userEmail, soundsEnabled = true, onToggleSounds, aiProvider = "lovable", onProviderChange, userKeys = [], activeKeyIndex = 0, onAddUserKeys, onRemoveUserKey, onClearUserKeys }: SettingsPanelProps) {
   if (!open) return null;
 
   return (
@@ -35,7 +41,7 @@ export function SettingsPanel({ open, onClose, isDark, onToggleTheme, ttsVoice, 
       <div className="absolute inset-0 bg-background/60 backdrop-blur-sm" onClick={onClose} />
 
       {/* Panel */}
-      <div className="relative z-10 w-full max-w-sm rounded-t-3xl sm:rounded-2xl bg-card border border-border shadow-2xl p-5 mx-0 sm:mx-4 animate-slide-up">
+      <div className="relative z-10 w-full max-w-sm max-h-[90vh] overflow-y-auto scrollbar-thin rounded-t-3xl sm:rounded-2xl bg-card border border-border shadow-2xl p-5 mx-0 sm:mx-4 animate-slide-up">
         <div className="flex items-center justify-between mb-5">
           <h2 className="text-base font-semibold text-foreground">Настройки</h2>
           <button onClick={onClose} className="btn-interactive rounded-full p-1.5 text-muted-foreground transition-all">
@@ -91,6 +97,19 @@ export function SettingsPanel({ open, onClose, isDark, onToggleTheme, ttsVoice, 
             <p className="mt-1.5 text-[11px] text-muted-foreground">
               Если выбранный провайдер недоступен, запрос автоматически пойдёт через запасной.
             </p>
+          </div>
+        )}
+
+        {/* User Gemini keys */}
+        {onAddUserKeys && onRemoveUserKey && onClearUserKeys && (
+          <div className="mb-4">
+            <UserApiKeysEditor
+              keys={userKeys}
+              activeIndex={activeKeyIndex}
+              onAdd={onAddUserKeys}
+              onRemove={onRemoveUserKey}
+              onClear={onClearUserKeys}
+            />
           </div>
         )}
 

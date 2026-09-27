@@ -99,7 +99,7 @@ function toGeminiContents(messages: any[]): { systemTexts: string[]; contents: G
 }
 
 /** Ответ в OpenAI-style SSE: фронтенд парсит choices[0].delta. */
-function geminiSseResponse(upstream: Response): Response {
+function geminiSseResponse(upstream: Response, keySource: "user" | "server", userKeyIndex: number): Response {
   const reader = upstream.body!.getReader();
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
@@ -145,22 +145,58 @@ function geminiSseResponse(upstream: Response): Response {
   });
 
   return new Response(stream, {
-    headers: { ...corsHeaders, "Content-Type": "text/event-stream", "x-ai-provider": "gemini" },
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "text/event-stream",
+      "x-ai-provider": "gemini",
+      "x-ai-key-source": keySource,
+      ...(keySource === "user" ? { "x-ai-key-index": String(userKeyIndex) } : {}),
+    },
   });
+}
+
+interface GeminiCallResult {
+  response: Response;
+  source: "user" | "server";
+  userIndex: number;
+}
+
+interface KeyAttempt {
+  key: string;
+  source: "user" | "server";
+  userIndex: number;
 }
 
 /**
  * Прямой вызов Google Generative Language API с ротацией ключей.
- * Возвращает Response при успехе или null, если все ключи/попытки не сработали.
+ * Сначала перебираются ключи пользователя (с активного индекса, по кругу),
+ * затем серверные GEMINI_API_KEYS. Значения ключей никогда не логируются.
+ * Возвращает результат при успехе или null, если все ключи/попытки не сработали.
  */
 async function callGeminiDirect(
   aiModel: string,
   systemContent: string,
   messages: any[],
   thinking: boolean,
-): Promise<Response | null> {
-  const keys = getGeminiKeys();
-  if (keys.length === 0) return null;
+  clientKeys: string[] = [],
+  startIndex = 0,
+): Promise<GeminiCallResult | null> {
+  const attempts: KeyAttempt[] = [];
+  if (clientKeys.length > 0) {
+    const start = startIndex % clientKeys.length;
+    for (let i = 0; i < clientKeys.length; i++) {
+      const idx = (start + i) % clientKeys.length;
+      attempts.push({ key: clientKeys[idx], source: "user", userIndex: idx });
+    }
+  }
+  const tried = new Set(attempts.map((a) => a.key));
+  for (const key of getGeminiKeys()) {
+    if (!tried.has(key)) {
+      tried.add(key);
+      attempts.push({ key, source: "server", userIndex: -1 });
+    }
+  }
+  if (attempts.length === 0) return null;
 
   const { systemTexts, contents } = toGeminiContents(messages);
   const fullSystem = [systemContent, ...systemTexts].filter(Boolean).join("\n\n");
@@ -178,9 +214,9 @@ async function callGeminiDirect(
     }
 
     let modelMissing = false;
-    for (const key of keys) {
+    for (const attempt of attempts) {
       try {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${googleModel}:streamGenerateContent?alt=sse&key=${key}`;
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${googleModel}:streamGenerateContent?alt=sse&key=${attempt.key}`;
         const resp = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -196,7 +232,11 @@ async function callGeminiDirect(
           }
           continue;
         }
-        return geminiSseResponse(resp);
+        return {
+          response: geminiSseResponse(resp, attempt.source, attempt.userIndex),
+          source: attempt.source,
+          userIndex: attempt.userIndex,
+        };
       } catch (e) {
         console.warn("Gemini direct key error:", e);
         continue;
@@ -221,7 +261,12 @@ async function callLovable(apiKey: string, body: unknown): Promise<Response> {
 
 function lovableSseResponse(upstream: Response): Response {
   return new Response(upstream.body, {
-    headers: { ...corsHeaders, "Content-Type": "text/event-stream", "x-ai-provider": "lovable" },
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "text/event-stream",
+      "x-ai-provider": "lovable",
+      "x-ai-key-source": "lovable",
+    },
   });
 }
 
@@ -268,7 +313,17 @@ serve(async (req) => {
       console.warn("quota check skipped:", e);
     }
 
-    const { messages, model, thinking, provider } = await req.json();
+    const { messages, model, thinking, provider, userKeys, userKeyIndex } = await req.json();
+    // Ключи пользователя из настроек (до 15): пробуются первыми, с активного индекса.
+    const clientKeys: string[] = Array.isArray(userKeys)
+      ? userKeys
+        .filter((k: unknown): k is string => typeof k === "string" && k.trim().length >= 8 && k.trim().length <= 300)
+        .map((k: string) => k.trim())
+        .slice(0, 15)
+      : [];
+    const clientKeyIndex = Number.isInteger(userKeyIndex) && (userKeyIndex as number) >= 0
+      ? (userKeyIndex as number)
+      : 0;
     const requestedProvider: AiProvider = provider === "gemini" ? "gemini" : "lovable";
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
 
@@ -445,8 +500,8 @@ serve(async (req) => {
 
     // === Выбран Gemini API: прямой вызов Google, запасной — Lovable ===
     if (requestedProvider === "gemini") {
-      const direct = await callGeminiDirect(aiModel, systemContent, messages, thinking);
-      if (direct) return direct;
+      const direct = await callGeminiDirect(aiModel, systemContent, messages, thinking, clientKeys, clientKeyIndex);
+      if (direct) return direct.response;
 
       console.log("Direct Gemini API failed, falling back to Lovable gateway");
       if (!LOVABLE_API_KEY) {
@@ -470,8 +525,8 @@ serve(async (req) => {
     // === Выбран Lovable (дефолт): шлюз, при пустом балансе — прямой Gemini ===
     if (!LOVABLE_API_KEY) {
       // Ключа шлюза нет вообще — сразу пробуем прямой Gemini.
-      const direct = await callGeminiDirect(aiModel, systemContent, messages, thinking);
-      if (direct) return direct;
+      const direct = await callGeminiDirect(aiModel, systemContent, messages, thinking, clientKeys, clientKeyIndex);
+      if (direct) return direct.response;
       throw new Error("LOVABLE_API_KEY is not configured");
     }
 
@@ -487,8 +542,8 @@ serve(async (req) => {
       if (response.status === 402) {
         // Fallback: try direct Google Gemini API with rotating keys
         console.log("Lovable AI balance exhausted, falling back to direct Gemini API");
-        const fallback = await callGeminiDirect(aiModel, systemContent, messages, thinking);
-        if (fallback) return fallback;
+        const fallback = await callGeminiDirect(aiModel, systemContent, messages, thinking, clientKeys, clientKeyIndex);
+        if (fallback) return fallback.response;
         return new Response(
           JSON.stringify({ error: "Необходимо пополнить баланс." }),
           { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }

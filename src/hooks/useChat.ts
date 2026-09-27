@@ -5,6 +5,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useSounds } from "@/hooks/useSounds";
 import { AI_PROVIDERS, type AiProvider } from "@/types/ai-provider";
 import { useAiProvider } from "@/hooks/useAiProvider";
+import { useUserApiKeys } from "@/hooks/useUserApiKeys";
 
 export interface Message {
   id: string;
@@ -75,6 +76,14 @@ export function useChat() {
   const [selectedModel, setSelectedModel] = useState("HikkoGPT Smart");
   const [thinkingEnabled, setThinkingEnabled] = useState(false);
   const { provider: aiProvider, setProvider: setAiProvider } = useAiProvider();
+  const {
+    keys: userGeminiKeys,
+    activeIndex: activeKeyIndex,
+    setActiveIndex: setActiveKeyIndex,
+    addKeysFromText: addUserKeys,
+    removeKey: removeUserKey,
+    clearKeys: clearUserKeys,
+  } = useUserApiKeys();
   const [soundsEnabled, setSoundsEnabled] = useState(() => {
     if (typeof window === "undefined") return true;
     return localStorage.getItem("hikko_sounds") !== "0";
@@ -318,7 +327,7 @@ export function useChat() {
             Authorization: `Bearer ${accessToken}`,
             apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
           },
-          body: JSON.stringify({ messages: apiMessages, model: selectedModel, thinking: thinkingEnabled, provider: aiProvider }),
+          body: JSON.stringify({ messages: apiMessages, model: selectedModel, thinking: thinkingEnabled, provider: aiProvider, userKeys: userGeminiKeys, userKeyIndex: activeKeyIndex }),
           signal: controller.signal,
         });
 
@@ -327,6 +336,19 @@ export function useChat() {
         const actualProvider = resp.headers.get("x-ai-provider");
         if (resp.ok && actualProvider && actualProvider !== aiProvider && (actualProvider === "lovable" || actualProvider === "gemini")) {
           toast.info(`Отвечаю через ${AI_PROVIDERS[actualProvider as AiProvider].label} — выбранный провайдер недоступен`);
+        }
+
+        // При прямом Gemini сервер сообщает, какой ключ сработал:
+        // запоминаем его активным, чтобы следующий запрос начинался с него.
+        if (resp.ok && actualProvider === "gemini") {
+          const keySource = resp.headers.get("x-ai-key-source");
+          const keyIndexRaw = resp.headers.get("x-ai-key-index");
+          const keyIndex = keyIndexRaw == null ? NaN : Number.parseInt(keyIndexRaw, 10);
+          if (keySource === "user" && Number.isInteger(keyIndex) && keyIndex >= 0) {
+            setActiveKeyIndex(keyIndex);
+          } else if (keySource === "server" && userGeminiKeys.length > 0) {
+            toast.info("Квота ваших ключей исчерпана — отвечаю через серверный ключ");
+          }
         }
 
         if (!resp.ok) {
@@ -478,7 +500,7 @@ export function useChat() {
       setIsStreaming(false);
       abortRef.current = null;
     },
-    [activeChatId, chats, selectedModel, thinkingEnabled, aiProvider, user]
+    [activeChatId, chats, selectedModel, thinkingEnabled, aiProvider, userGeminiKeys, activeKeyIndex, setActiveKeyIndex, user]
   );
 
   const stopStreaming = useCallback(() => {
@@ -497,6 +519,11 @@ export function useChat() {
     toggleSounds,
     aiProvider,
     setAiProvider,
+    userGeminiKeys,
+    activeKeyIndex,
+    addUserKeys,
+    removeUserKey,
+    clearUserKeys,
     setThinkingEnabled,
     setSelectedModel,
     setActiveChatId,

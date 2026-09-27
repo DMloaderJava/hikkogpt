@@ -25,6 +25,7 @@ const Index = () => {
     chats, activeChat, activeChatId, isStreaming,
     selectedModel, thinkingEnabled, soundsEnabled, toggleSounds,
     aiProvider, setAiProvider,
+    userGeminiKeys, activeKeyIndex, addUserKeys, removeUserKey, clearUserKeys,
     setThinkingEnabled, setSelectedModel, setActiveChatId,
     createNewChat, deleteChat, renameChat, sendMessage, stopStreaming,
   } = useChat();
@@ -402,6 +403,11 @@ const Index = () => {
         onToggleSounds={toggleSounds}
         aiProvider={aiProvider}
         onProviderChange={handleProviderChange}
+        userKeys={userGeminiKeys}
+        activeKeyIndex={activeKeyIndex}
+        onAddUserKeys={addUserKeys}
+        onRemoveUserKey={removeUserKey}
+        onClearUserKeys={clearUserKeys}
       />
     </div>
   );
