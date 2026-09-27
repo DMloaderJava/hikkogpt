@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { useMangaVoice, type VoicesMap } from "@/hooks/useMangaVoice";
 import { ANALYZE_BATCH_SIZE, ANALYZE_PAYLOAD_BUDGET } from "@/lib/mangaPages";
 import { EDGE_FUNCTIONS_URL, SUPABASE_FUNCTIONS_URL, withRequestTimeout } from "@/lib/edgeAuth";
+import { DEFAULT_MANGA_API, MANGA_API_OPTIONS } from "@/lib/mangaApi";
 
 /**
  * Метод запросов озвучивателя манги (`useMangaVoice`).
@@ -22,9 +23,11 @@ const hookSource = readFileSync(resolve(process.cwd(), "src/hooks/useMangaVoice.
 const modalSource = readFileSync(resolve(process.cwd(), "src/components/MangaVoiceModal.tsx"), "utf8");
 const chatSource = readFileSync(resolve(process.cwd(), "src/hooks/useChat.ts"), "utf8");
 
-/** Тело запроса: `images` у manga-analyze, `transcript`/`voices` у dialog-tts. */
+/** Тело запроса: `images`+`model` у manga-analyze, `transcript`/`voices` у dialog-tts. */
 interface RecordedBody {
   images?: string[];
+  /** Имя api из переключателя — его мапит сервер (`toAiModel`). */
+  model?: string;
   transcript?: string;
   voices?: VoicesMap;
 }
@@ -76,6 +79,8 @@ const analyzePagesResponse = (n: number, prefix = "Кадр") =>
   });
 
 beforeEach(() => {
+  // Выбор api хранится в localStorage — каждый тест начинает с чистого листа.
+  window.localStorage.clear();
   urlSeq = 0;
   created.length = 0;
   revoked.length = 0;
@@ -630,11 +635,155 @@ describe("useMangaVoice: уборка", () => {
   });
 });
 
+describe("useMangaVoice: смена api анализа", () => {
+  it("по умолчанию шлёт api из списка переключателя", async () => {
+    const hook = setup();
+    expect(hook.result.current.apiModel).toBe(DEFAULT_MANGA_API);
+
+    await analyze(hook, 1);
+    const model = calls.find((c) => c.fn === "manga-analyze")?.body.model;
+    expect(model).toBe(DEFAULT_MANGA_API);
+    expect(MANGA_API_OPTIONS.map((o) => o.id)).toContain(model);
+  });
+
+  it("выбранное api уходит в следующем запросе и запоминается", async () => {
+    const hook = setup();
+    await addPages(hook, 1);
+
+    act(() => {
+      hook.result.current.setApiModel("HikkoGPT");
+    });
+    expect(hook.result.current.apiModel).toBe("HikkoGPT");
+
+    await act(async () => {
+      await hook.result.current.analyzePages();
+    });
+    expect(calls.find((c) => c.fn === "manga-analyze")?.body.model).toBe("HikkoGPT");
+    expect(window.localStorage.getItem("hikkogpt.manga.api")).toBe("HikkoGPT");
+  });
+
+  it("имя не из списка на сервер не уходит", async () => {
+    const hook = setup();
+    act(() => {
+      hook.result.current.setApiModel("gpt-5-mini");
+      hook.result.current.setApiModel("");
+    });
+    expect(hook.result.current.apiModel).toBe(DEFAULT_MANGA_API);
+
+    await analyze(hook, 1);
+    expect(MANGA_API_OPTIONS.map((o) => o.id)).toContain(
+      calls.find((c) => c.fn === "manga-analyze")?.body.model
+    );
+  });
+
+  it("модель чата становится api, пока своего выбора нет", () => {
+    const hook = renderHook(({ preferredApi }: { preferredApi?: string }) => useMangaVoice({ preferredApi }), {
+      initialProps: { preferredApi: "HikkoGPT Turbo" },
+    });
+    expect(hook.result.current.apiModel).toBe("HikkoGPT Turbo");
+
+    // Модель переключили в чате — окно манги следует за ней.
+    hook.rerender({ preferredApi: "Спорящий" });
+    expect(hook.result.current.apiModel).toBe("Спорящий");
+
+    // Чужое имя (персонаж, опечатка) api анализа не ломает.
+    hook.rerender({ preferredApi: "Илон Маск" });
+    expect(hook.result.current.apiModel).toBe("Спорящий");
+  });
+
+  it("свой выбор важнее модели чата и переживает переоткрытие окна", () => {
+    const hook = renderHook(({ preferredApi }: { preferredApi?: string }) => useMangaVoice({ preferredApi }), {
+      initialProps: { preferredApi: "HikkoGPT Turbo" },
+    });
+    act(() => {
+      hook.result.current.setApiModel("HikkoGPT");
+    });
+    hook.rerender({ preferredApi: "Спорящий" });
+    expect(hook.result.current.apiModel).toBe("HikkoGPT");
+
+    hook.unmount();
+    const next = renderHook(() => useMangaVoice({ preferredApi: "Спорящий" }));
+    expect(next.result.current.apiModel).toBe("HikkoGPT");
+  });
+
+  it("смена api посреди запуска не смешивает батчи: весь запуск на одной модели", async () => {
+    const hook = setup();
+    await addPages(hook, ANALYZE_BATCH_SIZE + 1); // два батча
+
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    handler = async (fn, body) => {
+      await gate;
+      return fn === "dialog-tts" ? audioResponse() : analyzePagesResponse(body.images?.length ?? 0);
+    };
+
+    let finished!: Promise<boolean>;
+    act(() => {
+      finished = hook.result.current.analyzePages();
+    });
+    // Пользователь переключил api, пока запрос в пути.
+    await act(async () => {
+      hook.result.current.setApiModel("HikkoGPT");
+    });
+    await act(async () => {
+      release();
+      await finished;
+    });
+
+    const analyzeCalls = calls.filter((c) => c.fn === "manga-analyze");
+    expect(analyzeCalls).toHaveLength(2);
+    expect(analyzeCalls.every((c) => c.body.model === DEFAULT_MANGA_API)).toBe(true);
+    expect(hook.result.current.apiModel).toBe("HikkoGPT");
+
+    // Следующий запуск — уже на новом api.
+    await act(async () => {
+      hook.result.current.reset();
+    });
+    calls.length = 0;
+    await analyze(hook, 1);
+    expect(calls.find((c) => c.fn === "manga-analyze")?.body.model).toBe("HikkoGPT");
+  });
+
+  it("процесс показывает, какое api разбирает страницы", async () => {
+    const hook = setup();
+    handler = async (_fn, _body, init) => hangingResponse(init);
+    await addPages(hook, 2);
+
+    let finished!: Promise<boolean>;
+    act(() => {
+      finished = hook.result.current.analyzePages();
+    });
+    await waitFor(() => expect(hook.result.current.analyzeProgress?.model).toBe(DEFAULT_MANGA_API));
+    await act(async () => {
+      hook.result.current.stop();
+      await finished;
+    });
+  });
+
+  it("страж: api уходит полем model, а не хардкодом в теле запроса", () => {
+    expect(hookSource).toContain("const model = apiModelRef.current");
+    expect(hookSource).toContain("{ images: batch.images, model }");
+    // Модель берётся один раз на запуск — батчи не разъезжаются по разным api.
+    expect(hookSource).not.toMatch(/images: batch\.images\s*\}/);
+  });
+});
+
 describe("стражи: метод тот же, что при отправке сообщения", () => {
   it("модалка работает через useMangaVoice и не собирает fetch сама", () => {
-    expect(modalSource).toContain("useMangaVoice()");
+    expect(modalSource).toMatch(/useMangaVoice\(\{/);
     expect(modalSource).not.toMatch(/\bfetch\(/);
     expect(modalSource).not.toContain("getEdgeAuthHeaders");
+  });
+
+  it("модалка передаёт в хук api и показывает переключатель", () => {
+    // Модель чата — api по умолчанию, свой выбор окна манги важнее.
+    expect(modalSource).toContain("useMangaVoice({ preferredApi: chatModel })");
+    expect(modalSource).toContain("<MangaApiSelector");
+    expect(modalSource).toContain("onChange={setApiModel}");
+    // Пока запрос идёт, api не переключается: батч должен пройти на одной модели.
+    expect(modalSource).toMatch(/disabled=\{isRequesting\}/);
   });
 
   it("в модалке есть остановка запросов", () => {

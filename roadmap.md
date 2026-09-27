@@ -145,6 +145,42 @@
       `mangaAnalyze.test.ts` (23, +4), `dialogueOnly`/`formatTranscript` в `mangaTranscript.test.ts` (25, +10),
       UI-проверки диалога, кольца-прогресса и слоя страницы в `mangaVoiceModal.test.tsx` (27) — всего 312
 
+### 3.3 Смена api в анализаторе манги (2026-09-27)
+
+Раньше `manga-analyze` был зашит на одну модель (`google/gemini-3-flash-preview`), а переключатель
+моделей чата на анализ не влиял. Теперь api выбирается в самом окне манги и доезжает до сервера.
+
+- [x] **Переключатель в шапке окна** (`src/components/MangaApiSelector.tsx`): компактный аналог
+      `ModelSelector` — те же имена (`HikkoGPT`, `HikkoGPT Smart`, `HikkoGPT Turbo`, `Спорящий`),
+      но без персонажей чата: для разбора страниц они смысла не имеют. Панель позиционируется `fixed`
+      от кнопки, поэтому не обрезается краями диалога; закрывается по Escape и клику мимо.
+      Во время запроса переключатель заблокирован — батч должен пройти на одной модели
+- [x] **Общий список и хранение выбора** (`src/lib/mangaApi.ts`): имена, подписи, `DEFAULT_MANGA_API`,
+      `loadMangaApi`/`saveMangaApi`/`hasStoredMangaApi` с защитой от недоступного localStorage
+      (приватный режим) и от мусора в хранилище. Выбор окна манги хранится отдельно от чата, но пока
+      своего выбора нет — берётся модель чата (`chatModel` → `preferredApi`), поэтому
+      `Index.tsx` → `ChatInput` → `MangaVoiceModal` прокидывают `selectedModel`
+- [x] **Хук** (`src/hooks/useMangaVoice.ts`): `apiModel` + `setApiModel` (имя не из списка на сервер
+      не уходит), модель берётся один раз на запуск (`apiModelRef`) и кладётся в тело каждого батча —
+      `{ images, model }`; смена api посреди главы не смешивает нумерацию персонажей между батчами.
+      Имя api видно в процессе: `analyzeProgress.model` и строка «Api анализа: …» под кольцом
+- [x] **Сервер** (`supabase/functions/manga-analyze/`): `MANGA_MODEL_MAP` + `toAiModel` в `parse.ts`
+      мапят имя в модель шлюза (неизвестное имя или старый клиент без `model` → модель по умолчанию,
+      запрос не ломается); системный промпт вынесен в `SYSTEM_PROMPT` и используется обоими api,
+      поэтому формат реплик от выбора api не зависит. **Нужен деплой функции**
+- [x] **Запасной api**: при 402/429/5xx основного (`shouldSwitchApi`) функция пробует прямой Google
+      Gemini по ключам `GEMINI_API_KEYS` (`tryGeminiAnalyze`, тот же маппинг `toGoogleModel`, что в
+      `chat`). Страницы переводятся из `image_url` в `inline_data` (`dataUrlToInlineData` +
+      `geminiAnalyzeBody`), иначе запасной api не увидел бы картинок; ответ разбирается тем же
+      `extractJson`/`normalizePages`. Если ключей нет или все ответили ошибкой — пользователь получает
+      прежнюю понятную причину основного api
+- [x] Тесты: `mangaApi.test.tsx` (18 — совпадение списков клиента и сервера, хранение выбора,
+      поведение переключателя, стражи), `mangaAnalyze.test.ts` (+10 на `toAiModel`, `toGoogleModel`,
+      `shouldSwitchApi`, `geminiAnalyzeBody`, `geminiText`), `useMangaVoice.test.tsx` (+9: `model` в
+      теле, память выбора, приоритет своего выбора над моделью чата, один api на весь запуск),
+      `mangaVoiceModal.test.tsx` (+8: переключатель в шапке, строка api, блокировка во время запроса,
+      все батчи на одном api) — всего 356
+
 ## Дальше (идеи, не начато)
 
 - [ ] Перевести на общий `edgeRequest` остальные точки вызова: `useDeepSearch`,

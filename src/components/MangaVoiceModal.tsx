@@ -15,6 +15,7 @@
 import { useEffect, useState } from "react";
 import { BookOpen, Loader2, Pencil, Square, Trash2, Volume2, X } from "lucide-react";
 import { AudioPlayer } from "@/components/AudioPlayer";
+import { MangaApiSelector } from "@/components/MangaApiSelector";
 import { MangaProgressRing } from "@/components/MangaProgress";
 import { MANGA_STEPS_TOTAL, useMangaVoice, type MangaPage } from "@/hooks/useMangaVoice";
 import { ACCEPTED_PAGE_ACCEPT, ANALYZE_BATCH_SIZE } from "@/lib/mangaPages";
@@ -24,6 +25,8 @@ import type { STAGE_LABELS } from "@/lib/mangaRequestError";
 interface MangaVoiceModalProps {
   open: boolean;
   onClose: () => void;
+  /** Модель чата: пока в окне манги не выбрали своё api, анализируем ею. */
+  chatModel?: string;
 }
 
 /** Реплики страницы как диалог по ролям: «Speaker 1» + текст + чей голос. */
@@ -47,10 +50,12 @@ function DialogLines({ page, voices }: { page: MangaPage; voices: Record<string,
   );
 }
 
-export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
+export function MangaVoiceModal({ open, onClose, chatModel }: MangaVoiceModalProps) {
   const {
     pages,
     voices,
+    apiModel,
+    setApiModel,
     chapter,
     readyPages,
     pendingCount,
@@ -70,7 +75,7 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
     speakPage,
     speakAll,
     stop,
-  } = useMangaVoice();
+  } = useMangaVoice({ preferredApi: chatModel });
 
   /** Какие страницы правятся вручную (после озвучки textarea скрыт). */
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -132,6 +137,8 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
             Озвучиватель манги
           </h2>
           <div className="flex items-center gap-2">
+            {/* Смена api: какая модель разбирает страницы этой главы. */}
+            <MangaApiSelector value={apiModel} onChange={setApiModel} disabled={isRequesting} />
             <span
               data-testid="manga-stage"
               className="rounded-full border border-border px-2.5 py-1 text-[10px] tracking-[0.12em] text-muted-foreground"
@@ -150,8 +157,8 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
 
         <p className="mb-2 text-xs text-muted-foreground">
           Загрузите страницы по порядку — они разбираются батчами по {ANALYZE_BATCH_SIZE} изображений
-          за одно нажатие. Модель возвращает только реплики вида «Speaker 1: …», каждая страница
-          получает свою озвучку.
+          за одно нажатие. Api в правом верхнем углу выбирает, какая модель возвращает реплики вида
+          «Speaker 1: …»; каждая страница получает свою озвучку.
         </p>
 
         <input
@@ -175,6 +182,11 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
             active={isRequesting}
             phase={progress.phase}
           />
+          {/* Какого api этот запуск: во время запроса модель уже не меняется. */}
+          <p data-testid="manga-api-line" className="mt-2 text-center text-[11px] text-muted-foreground">
+            Api анализа: <span className="font-medium text-foreground">{analyzeProgress?.model ?? apiModel}</span>
+            {isRequesting ? " · до конца запроса не меняется" : ""}
+          </p>
         </div>
 
         {pages.length > 0 && (

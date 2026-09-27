@@ -27,7 +27,8 @@
  *    `Promise.allSettled` в автораскладке картинок в чате).
  *
  * Серверные функции (`manga-analyze`, `dialog-tts`) не меняются: контракт
- * запросов и ответов прежний.
+ * запросов и ответов прежний. Единственное добавление — поле `model` в теле
+ * `manga-analyze`: так работает смена api (какая модель разбирает страницы).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -62,6 +63,7 @@ import {
   type TranscriptPlan,
   type TtsVoice,
 } from "@/lib/mangaTranscript";
+import { hasStoredMangaApi, isMangaApi, loadMangaApi, saveMangaApi } from "@/lib/mangaApi";
 
 /** Функции, в которые ходит фича (те же пути, что и раньше). */
 export const MANGA_ANALYZE_FN = "manga-analyze";
@@ -111,6 +113,8 @@ export interface AnalyzeProgress {
   total: number;
   /** Сколько из них уже разобрано. */
   done: number;
+  /** Какое api разбирает этот запуск (имя из переключателя) — для строки процесса. */
+  model?: string;
 }
 
 /** Номер этапа для бейджа: 1 — страницы, 2 — сжатие, 3 — анализ, 4 — озвучка, 5 — готово. */
@@ -170,11 +174,25 @@ function applyAnalyzeResult(page: MangaPage, item: AnalyzePageResult | undefined
   };
 }
 
-export function useMangaVoice() {
+/** Настройки хука озвучивателя. */
+export interface UseMangaVoiceOptions {
+  /**
+   * Модель чата — берётся как api анализа, пока пользователь не выбрал своё в
+   * окне манги: свой выбор сохраняется и дальше имеет приоритет.
+   */
+  preferredApi?: string;
+}
+
+export function useMangaVoice({ preferredApi }: UseMangaVoiceOptions = {}) {
   const [pages, setPages] = useState<MangaPage[]>([]);
   const [voices, setVoices] = useState<VoicesMap>(
     () => Object.fromEntries(TTS_VOICES.map((voice, i) => [String(i + 1), voice])) as VoicesMap
   );
+  /**
+   * Какое api разбирает страницы. Имя уходит в `manga-analyze` полем `model`,
+   * а конкретную модель выбирает сервер — как в `chat`.
+   */
+  const [apiModel, setApiModelState] = useState<string>(() => loadMangaApi(preferredApi));
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analyzeProgress, setAnalyzeProgress] = useState<AnalyzeProgress | null>(null);
   /** id страницы, которая озвучивается прямо сейчас. */
@@ -199,6 +217,25 @@ export function useMangaVoice() {
   pagesRef.current = pages;
   const voicesRef = useRef(voices);
   voicesRef.current = voices;
+  /** Свежее api внутри цикла батчей — переключение во время запроса его не рвёт. */
+  const apiModelRef = useRef(apiModel);
+  apiModelRef.current = apiModel;
+
+  /**
+   * Выбор api пользователем: неизвестное имя на сервер не уходит, а валидное
+   * запоминается — при следующем открытии окна манги оно же и подставится.
+   */
+  const setApiModel = useCallback((id: string) => {
+    if (!isMangaApi(id)) return;
+    setApiModelState(id);
+    saveMangaApi(id);
+  }, []);
+
+  // Пока своего сохранённого выбора нет, окно манги следует за моделью чата.
+  useEffect(() => {
+    if (hasStoredMangaApi() || !isMangaApi(preferredApi)) return;
+    setApiModelState((prev) => (prev === preferredApi ? prev : preferredApi));
+  }, [preferredApi]);
 
   /**
    * Единственный способ менять страницы: следующее состояние считается из ref
@@ -342,11 +379,14 @@ export function useMangaVoice() {
 
     runningRef.current = true;
     stoppedRef.current = false;
+    // Одна модель на весь запуск: смена api посреди главы не должна смешивать
+    // нумерацию персонажей между батчами.
+    const model = apiModelRef.current;
     setIsAnalyzing(true);
     setError("");
     setFailure(null);
     setPhase("preparing");
-    setAnalyzeProgress({ preparing: true, batch: 1, batches: 1, total: queue.length, done: 0 });
+    setAnalyzeProgress({ preparing: true, batch: 1, batches: 1, total: queue.length, done: 0, model });
 
     const runId = (runIdRef.current += 1);
     const controller = new AbortController();
@@ -373,13 +413,15 @@ export function useMangaVoice() {
 
         const batch = batches[i];
         const batchIds = batch.pages.map((p) => p.id);
-        setAnalyzeProgress({ batch: i + 1, batches: batches.length, total: queue.length, done });
+        setAnalyzeProgress({ batch: i + 1, batches: batches.length, total: queue.length, done, model });
 
         try {
-          // Этап 3 — запрос к api анализа манги.
+          // Этап 3 — запрос к api анализа манги. Поле `model` — имя api из
+          // переключателя: сервер сам решает, какую модель дёрнуть и на какую
+          // сменить её при лимите (`toAiModel` + `shouldSwitchApi`).
           const data = await edgeJson<{ pages?: AnalyzePageResult[] }>(
             MANGA_ANALYZE_FN,
-            { images: batch.images },
+            { images: batch.images, model },
             controller.signal
           );
           const result: AnalyzePageResult[] = Array.isArray(data?.pages) ? data.pages : [];
@@ -697,6 +739,8 @@ export function useMangaVoice() {
   return {
     pages,
     voices,
+    apiModel,
+    setApiModel,
     chapter,
     readyPages,
     pendingCount,

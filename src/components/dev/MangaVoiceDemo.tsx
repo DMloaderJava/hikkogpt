@@ -96,7 +96,11 @@ async function wavBlob(seconds = 2) {
   return new Blob([bytes], { type: "audio/wav" });
 }
 
-async function simulatedResponse(fn: string, body: { images?: string[] }, signal?: AbortSignal | null) {
+async function simulatedResponse(
+  fn: string,
+  body: { images?: string[]; model?: string },
+  signal?: AbortSignal | null
+) {
   if (scenario === "hang") {
     pushLog(`${fn}: запрос завис (ждем «Стоп»)· signal=${signal ? "есть" : "НЕТ"}`);
     return new Promise((_resolve, reject) => {
@@ -108,7 +112,8 @@ async function simulatedResponse(fn: string, body: { images?: string[] }, signal
 
   if (fn === "manga-analyze") {
     const count = body.images?.length ?? 0;
-    pushLog(`${fn}: ${count} страниц · signal=${signal ? "есть" : "НЕТ"}`);
+    // Api из переключателя видно в журнале: запрос уходит с полем `model`.
+    pushLog(`${fn}: ${count} страниц · api=${body.model ?? "не указано"} · signal=${signal ? "есть" : "НЕТ"}`);
     if (scenario === "analyzeError") return json({ error: "Сервис анализа недоступен" }, 502);
     return json({
       pages: Array.from({ length: count }, (_, i) => ({
@@ -142,7 +147,7 @@ if (typeof window !== "undefined" && !(window as unknown as { __mangaPreviewPatc
     const isEdge = url.startsWith(EDGE_FUNCTIONS_URL) || at >= 0;
     if (!isEdge) return realFetch(input as RequestInfo, init);
     const fn = url.slice(at >= 0 ? at + marker.length : EDGE_FUNCTIONS_URL.length + 1).split(/[?#/]/)[0];
-    const body = init?.body ? (JSON.parse(String(init.body)) as { images?: string[] }) : {};
+    const body = init?.body ? (JSON.parse(String(init.body)) as { images?: string[]; model?: string }) : {};
     return simulatedResponse(fn, body, init?.signal) as unknown as Response;
   }) as typeof fetch;
   (window as unknown as { __mangaPreviewPatched?: boolean }).__mangaPreviewPatched = true;

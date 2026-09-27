@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, act } from "@testing-library/react"
 import { MangaVoiceModal } from "@/components/MangaVoiceModal";
 import { ANALYZE_BATCH_SIZE } from "@/lib/mangaPages";
 import { EDGE_FUNCTIONS_URL } from "@/lib/edgeAuth";
+import { DEFAULT_MANGA_API } from "@/lib/mangaApi";
 
 /**
  * Озвучиватель манги целиком: добавление страниц, анализ по батчам, правка
@@ -55,6 +56,8 @@ async function analyzeAll(times = 3) {
 }
 
 beforeEach(() => {
+  // Выбор api хранится в localStorage — тесты начинают с чистого листа.
+  window.localStorage.clear();
   urlSeq = 0;
   created.length = 0;
   revoked.length = 0;
@@ -626,5 +629,142 @@ describe("MangaVoiceModal: озвучка", () => {
     expect(screen.getByTestId("manga-page-1")).toBeTruthy();
     expect(screen.getByTestId("manga-speak-1").textContent).toContain("Переозвучить");
     expect(document.querySelector("audio")!.hasAttribute("autoplay")).toBe(false);
+  });
+});
+
+describe("MangaVoiceModal: смена api", () => {
+  const apiTrigger = () => screen.getByRole("button", { name: "Api анализа манги" });
+
+  /** Ответ анализа на одну страницу, чтобы запрос гарантированно прошёл. */
+  const onePageAnalyze = () => {
+    fetchImpl = async (url) =>
+      url.endsWith("/manga-analyze")
+        ? jsonResponse({ pages: [{ description: "Кадр 1", transcript: "Speaker 1: раз" }] })
+        : audioResponse();
+  };
+
+  it("переключатель живёт в шапке и показывает текущее api", () => {
+    open();
+    expect(screen.getByTestId("manga-api-selector")).toBeTruthy();
+    expect(apiTrigger()).toHaveTextContent(DEFAULT_MANGA_API);
+    // Строка под кольцом повторяет выбор — видно, чем будут разобраны страницы.
+    expect(screen.getByTestId("manga-api-line").textContent).toContain(DEFAULT_MANGA_API);
+  });
+
+  it("выбранное api уходит в запрос анализа", async () => {
+    open();
+    onePageAnalyze();
+
+    fireEvent.click(apiTrigger());
+    fireEvent.click(screen.getByRole("option", { name: /Спорящий/ }));
+    expect(apiTrigger()).toHaveTextContent("Спорящий");
+    expect(screen.getByTestId("manga-api-line").textContent).toContain("Спорящий");
+
+    setInputFiles(screen.getByTestId("manga-file-input"), [pngFile("p1.png")]);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("manga-analyze"));
+    });
+    await waitFor(() => expect(screen.getByTestId("manga-transcript-1")).toBeTruthy());
+
+    const analyze = calls.find((c) => c.url.endsWith("/manga-analyze"));
+    expect(analyze?.body.model).toBe("Спорящий");
+    // После ответа строка показывает api этого запуска.
+    expect(screen.getByTestId("manga-api-line").textContent).toContain("Спорящий");
+  });
+
+  it("api выбирается один раз и запоминается для следующего открытия", async () => {
+    open();
+    onePageAnalyze();
+    fireEvent.click(apiTrigger());
+    fireEvent.click(screen.getByRole("option", { name: /HikkoGPT Turbo/ }));
+
+    setInputFiles(screen.getByTestId("manga-file-input"), [pngFile("p1.png")]);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("manga-analyze"));
+    });
+    await waitFor(() => expect(screen.getByTestId("manga-transcript-1")).toBeTruthy());
+    expect(calls.find((c) => c.url.endsWith("/manga-analyze"))?.body.model).toBe("HikkoGPT Turbo");
+
+    // Окно закрыли и открыли заново — выбор на месте.
+    render(<MangaVoiceModal open onClose={vi.fn()} chatModel="Спорящий" />);
+    const triggers = screen.getAllByRole("button", { name: "Api анализа манги" });
+    expect(triggers[triggers.length - 1]).toHaveTextContent("HikkoGPT Turbo");
+  });
+
+  it("модель чата становится api, пока в окне не выбрали своё", async () => {
+    render(<MangaVoiceModal open onClose={vi.fn()} chatModel="HikkoGPT" />);
+    onePageAnalyze();
+    expect(apiTrigger()).toHaveTextContent("HikkoGPT");
+
+    setInputFiles(screen.getByTestId("manga-file-input"), [pngFile("p1.png")]);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("manga-analyze"));
+    });
+    await waitFor(() => expect(screen.getByTestId("manga-transcript-1")).toBeTruthy());
+    expect(calls.find((c) => c.url.endsWith("/manga-analyze"))?.body.model).toBe("HikkoGPT");
+  });
+
+  it("сохранённый выбор важнее модели чата", () => {
+    window.localStorage.setItem("hikkogpt.manga.api", "Спорящий");
+    render(<MangaVoiceModal open onClose={vi.fn()} chatModel="HikkoGPT" />);
+    expect(apiTrigger()).toHaveTextContent("Спорящий");
+  });
+
+  it("чужое имя из чата не становится api анализа", () => {
+    render(<MangaVoiceModal open onClose={vi.fn()} chatModel="Илон Маск" />);
+    expect(apiTrigger()).toHaveTextContent(DEFAULT_MANGA_API);
+  });
+
+  it("во время запроса api не переключается", async () => {
+    open();
+    fetchImpl = async (_url, init) =>
+      new Promise((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+      });
+
+    setInputFiles(screen.getByTestId("manga-file-input"), [pngFile("p1.png")]);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("manga-analyze"));
+    });
+    await waitFor(() => expect(apiTrigger().hasAttribute("disabled")).toBe(true));
+    // Клик по заблокированному переключателю список не открывает.
+    fireEvent.click(apiTrigger());
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(screen.getByTestId("manga-api-line").textContent).toContain("не меняется");
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("manga-stop"));
+    });
+    await waitFor(() => expect(apiTrigger().hasAttribute("disabled")).toBe(false));
+  });
+
+  it("все батчи главы идут на одном api", async () => {
+    open();
+    fetchImpl = async (url, init) => {
+      const count = init.body ? (JSON.parse(String(init.body)) as { images?: string[] }).images?.length ?? 0 : 0;
+      return url.endsWith("/manga-analyze")
+        ? jsonResponse({
+            pages: Array.from({ length: count }, (_, i) => ({
+              description: `Кадр ${i + 1}`,
+              transcript: `Speaker ${i + 1}: реплика ${i + 1}`,
+            })),
+          })
+        : audioResponse();
+    };
+
+    fireEvent.click(apiTrigger());
+    fireEvent.click(screen.getByRole("option", { name: /Спорящий/ }));
+    setInputFiles(
+      screen.getByTestId("manga-file-input"),
+      Array.from({ length: ANALYZE_BATCH_SIZE + 1 }, (_, i) => pngFile(`p${i + 1}.png`))
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("manga-analyze"));
+    });
+    await waitFor(() => expect(screen.getByTestId("manga-analyze").hasAttribute("disabled")).toBe(true));
+
+    const analyzeCalls = calls.filter((c) => c.url.endsWith("/manga-analyze"));
+    expect(analyzeCalls.length).toBeGreaterThan(1);
+    expect(analyzeCalls.every((c) => c.body.model === "Спорящий")).toBe(true);
   });
 });

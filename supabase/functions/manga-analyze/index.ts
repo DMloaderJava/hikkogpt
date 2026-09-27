@@ -3,7 +3,12 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import {
   MAX_IMAGES,
   extractJson,
+  geminiAnalyzeBody,
+  geminiText,
   normalizePages,
+  shouldSwitchApi,
+  toAiModel,
+  toGoogleModel,
   upstreamErrorMessage,
   validateImages,
 } from './parse.ts';
@@ -18,6 +23,93 @@ const json = (body: unknown, status = 200) =>
 /** Сколько ждём модель: wall-clock лимит edge-функции на Free — 150 с. */
 const UPSTREAM_TIMEOUT_MS = 120_000;
 
+/**
+ * Системный промпт анализа — один и для основного api (шлюз Lovable), и для
+ * запасного (прямой Google Gemini), чтобы смена api не меняла формат реплик.
+ */
+const SYSTEM_PROMPT = [
+  'Ты анализируешь страницы манги и возвращаешь ТОЛЬКО валидный JSON вида:',
+  '{"pages":[{"description":"...","transcript":"..."}]}',
+  '',
+  'Поле transcript — это реплики страницы, СТРОГО в таком формате (номер — реальная цифра, не буква N):',
+  'Speaker 1: Ребята, начинаем?',
+  '',
+  'Speaker 2: Я сказала тебе прекратить!',
+  '',
+  'Speaker 3: Ладно, ладно, понял.',
+  '',
+  'Speaker 4: Вы оба довольно забавные.',
+  '',
+  'Правила transcript:',
+  '- каждая реплика начинается с новой строки как «Speaker <номер>: <текст>» — номер от 1 до 8, конкретные цифры;',
+  '- между репликами одна пустая строка;',
+  '- персонажи без слов получают «Speaker <номер>: (без слов)»;',
+  '- номера одного и того же персонажа одинаковы на всех страницах;',
+  '- все видимые реплики передай на русском; если текста в кадре нет — придумай краткую реплику по сцене;',
+  '- никаких описаний, комментариев, имён вида «Рассказчик:», тире в начале строки, markdown, кавычек вокруг реплик и переводов строк внутри реплики;',
+  '- максимум 8 персонажей.',
+  '',
+  'Поле description — краткое описание сцены на русском (кто где, что происходит, кто говорит). Оно нужно только для стабильных номеров персонажей: в transcript его текст попадать не должен.',
+  '',
+  'Ответ — только JSON: без markdown-заборов, без пояснений до и после, без полей кроме description и transcript. Ровно один элемент pages на каждое изображение, в том же порядке.',
+].join('\n');
+
+/**
+ * Запасной api: прямой Google Gemini по ключам `GEMINI_API_KEYS` (те же ключи и
+ * тот же маппинг моделей, что в `chat`). Дёргается только когда основной api
+ * ответил лимитом/оплатой/сбоем (`shouldSwitchApi`) — иначе ошибка клиента
+ * бессмысленно дублировалась бы вторым запросом.
+ *
+ * Возвращает текст разбора или '' — тогда вызывающий код отвечает прежней
+ * понятной ошибкой основного api.
+ */
+async function tryGeminiAnalyze(systemPrompt: string, images: string[], aiModel: string): Promise<string> {
+  const keys = (Deno.env.get('GEMINI_API_KEYS') || '')
+    .split(/[\s,;\n]+/)
+    .map((k) => k.trim())
+    .filter(Boolean);
+  if (keys.length === 0) return '';
+
+  const body = geminiAnalyzeBody(systemPrompt, images, images.length);
+  if (!body) {
+    console.warn('manga-analyze: страницы не перевелись в inline_data — запасной api пропущен');
+    return '';
+  }
+
+  const googleModel = toGoogleModel(aiModel);
+  for (const key of keys) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
+    try {
+      const resp = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${googleModel}:generateContent?key=${key}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
+          body: JSON.stringify(body),
+        }
+      );
+      if (!resp.ok) {
+        const txt = await resp.text().catch(() => '');
+        console.warn(`manga-analyze: запасной api [${resp.status}]: ${txt.slice(0, 200)}`);
+        continue;
+      }
+      const text = geminiText(await resp.json());
+      if (text.trim()) {
+        console.log(`manga-analyze: разбор получен через запасной api (${googleModel})`);
+        return text;
+      }
+    } catch (e) {
+      console.warn('manga-analyze: запасной api недоступен:', e instanceof Error ? e.message : e);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  return '';
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: cors });
   try {
@@ -27,9 +119,12 @@ serve(async (req) => {
     const { data, error } = await sb.auth.getUser(token);
     if (error || !data.user) return json({ error: 'Unauthorized' }, 401);
 
-    const { images } = await req.json();
+    const { images, model } = await req.json();
     const validated = validateImages(images);
     if (!validated.ok) return json({ error: validated.error }, 400);
+
+    /** Смена api: имя из переключателя клиента → конкретная модель шлюза. */
+    const aiModel = toAiModel(model);
 
     const key = Deno.env.get('LOVABLE_API_KEY');
     if (!key) return json({ error: 'AI не настроен' }, 500);
@@ -43,38 +138,11 @@ serve(async (req) => {
         headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
         signal: controller.signal,
         body: JSON.stringify({
-          model: 'google/gemini-3-flash-preview',
+          // Модель выбирает клиент (переключатель api); имя уже проверено в toAiModel.
+          model: aiModel,
           stream: false,
           messages: [
-            {
-              role: 'system',
-              content: [
-                'Ты анализируешь страницы манги и возвращаешь ТОЛЬКО валидный JSON вида:',
-                '{"pages":[{"description":"...","transcript":"..."}]}',
-                '',
-                'Поле transcript — это реплики страницы, СТРОГО в таком формате (номер — реальная цифра, не буква N):',
-                'Speaker 1: Ребята, начинаем?',
-                '',
-                'Speaker 2: Я сказала тебе прекратить!',
-                '',
-                'Speaker 3: Ладно, ладно, понял.',
-                '',
-                'Speaker 4: Вы оба довольно забавные.',
-                '',
-                'Правила transcript:',
-                '- каждая реплика начинается с новой строки как «Speaker <номер>: <текст>» — номер от 1 до 8, конкретные цифры;',
-                '- между репликами одна пустая строка;',
-                '- персонажи без слов получают «Speaker <номер>: (без слов)»;',
-                '- номера одного и того же персонажа одинаковы на всех страницах;',
-                '- все видимые реплики передай на русском; если текста в кадре нет — придумай краткую реплику по сцене;',
-                '- никаких описаний, комментариев, имён вида «Рассказчик:», тире в начале строки, markdown, кавычек вокруг реплик и переводов строк внутри реплики;',
-                '- максимум 8 персонажей.',
-                '',
-                'Поле description — краткое описание сцены на русском (кто где, что происходит, кто говорит). Оно нужно только для стабильных номеров персонажей: в transcript его текст попадать не должен.',
-                '',
-                'Ответ — только JSON: без markdown-заборов, без пояснений до и после, без полей кроме description и transcript. Ровно один элемент pages на каждое изображение, в том же порядке.',
-              ].join('\n'),
-            },
+            { role: 'system', content: SYSTEM_PROMPT },
             {
               role: 'user',
               content: [
@@ -92,16 +160,23 @@ serve(async (req) => {
       clearTimeout(timer);
     }
 
-    if (!response.ok) {
+    let raw = '';
+    if (response.ok) {
+      const result = await response.json();
+      const content = result?.choices?.[0]?.message?.content;
+      raw = typeof content === 'string' ? content : '';
+    } else {
       const detail = await response.text().catch(() => '');
-      console.error(`manga-analyze upstream [${response.status}]:`, detail.slice(0, 2000));
-      return json({ error: upstreamErrorMessage(response.status) }, response.status === 429 ? 429 : 502);
+      console.error(`manga-analyze upstream [${response.status}] (api: ${aiModel}):`, detail.slice(0, 2000));
+      // Смена api: основной ответил лимитом, оплатой или сбоем — пробуем запасной.
+      if (shouldSwitchApi(response.status)) raw = await tryGeminiAnalyze(SYSTEM_PROMPT, validated.images, aiModel);
+      if (!raw.trim()) {
+        return json({ error: upstreamErrorMessage(response.status) }, response.status === 429 ? 429 : 502);
+      }
     }
 
-    const result = await response.json();
-    const raw = result?.choices?.[0]?.message?.content;
-    if (typeof raw !== 'string' || !raw.trim()) {
-      console.error('manga-analyze: пустой content от модели');
+    if (!raw.trim()) {
+      console.error(`manga-analyze: пустой content от модели (api: ${aiModel})`);
       return json({ error: 'Модель не вернула описание страниц, попробуйте снова' }, 502);
     }
 

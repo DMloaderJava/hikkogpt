@@ -31,11 +31,13 @@ interface ChatInputProps {
   onToggleVoiceMode?: () => void;
   /** E-mail текущего пользователя — для исключений из лимита вложений. */
   userEmail?: string | null;
+  /** Модель чата — api анализа манги по умолчанию, пока в окне не выбрали своё. */
+  selectedModel?: string;
 }
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
-export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = true, deepSearchUsed = false, onDeepSearch, voiceModeStatus, onToggleVoiceMode, userEmail }: ChatInputProps) {
+export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = true, deepSearchUsed = false, onDeepSearch, voiceModeStatus, onToggleVoiceMode, userEmail, selectedModel }: ChatInputProps) {
   const [value, setValue] = useState("");
   // Лёгкие Blob-превью (object URL), НЕ base64 — иначе ввод лагает.
   const [imagePreviews, setImagePreviews] = useState<ImageAttachment[]>([]);
@@ -357,7 +359,7 @@ export function ChatInput({ onSend, isStreaming, onStop, deepSearchEnabled = tru
         </button>
       </div>
 
-      <MangaVoiceModal open={mangaOpen} onClose={() => setMangaOpen(false)} />
+      <MangaVoiceModal open={mangaOpen} onClose={() => setMangaOpen(false)} chatModel={selectedModel} />
       <DialogTtsModal open={ttsOpen} onClose={() => setTtsOpen(false)} />
 
       <CameraBottomSheet
