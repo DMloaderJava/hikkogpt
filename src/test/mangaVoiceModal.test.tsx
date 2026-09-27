@@ -32,12 +32,14 @@ function setInputFiles(input: HTMLElement, files: File[]) {
 const jsonResponse = (data: unknown, status = 200) => ({
   ok: status >= 200 && status < 300,
   status,
+  headers: new Headers(),
   json: async () => data,
 });
 
 const audioResponse = () => ({
   ok: true,
   status: 200,
+  headers: new Headers(),
   blob: async () => new Blob([new Uint8Array([1, 2, 3, 4])], { type: "audio/wav" }),
 });
 

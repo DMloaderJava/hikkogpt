@@ -1,5 +1,8 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+
+/** Событие same-tab синхронизации: ключи или активный индекс изменились. */
+export const USER_KEYS_EVENT = "hikko:user-keys-changed";
 import {
   MAX_USER_GEMINI_KEYS,
   getStoredUserKeyIndex,
@@ -14,6 +17,7 @@ import {
  * Пользовательские Gemini-ключи из настроек.
  * `activeIndex` — ключ, с которого сервер начнёт перебор (обновляется
  * после каждого ответа: сервер сообщает, какой ключ реально сработал).
+ * Все экземпляры хука синхронизированы через localStorage + событие.
  */
 export function useUserApiKeys() {
   const [keys, setKeysState] = useState<string[]>(getStoredUserKeys);
@@ -22,12 +26,23 @@ export function useUserApiKeys() {
   const setKeys = useCallback((next: string[]) => {
     setKeysState(next);
     setStoredUserKeys(next);
+    window.dispatchEvent(new Event(USER_KEYS_EVENT));
   }, []);
 
   const setActiveIndex = useCallback((index: number) => {
     const value = Math.max(0, Math.floor(index) || 0);
     setActiveIndexState(value);
     setStoredUserKeyIndex(value);
+    window.dispatchEvent(new Event(USER_KEYS_EVENT));
+  }, []);
+
+  useEffect(() => {
+    const resync = () => {
+      setKeysState(getStoredUserKeys());
+      setActiveIndexState(getStoredUserKeyIndex());
+    };
+    window.addEventListener(USER_KEYS_EVENT, resync);
+    return () => window.removeEventListener(USER_KEYS_EVENT, resync);
   }, []);
 
   const addKeysFromText = useCallback(
