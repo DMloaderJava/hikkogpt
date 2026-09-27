@@ -1,6 +1,9 @@
 import { useState, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import { getEdgeAuthHeaders } from "@/lib/edgeAuth";
+import { useAiProvider } from "@/hooks/useAiProvider";
+import { useUserApiKeys } from "@/hooks/useUserApiKeys";
+import { syncActiveKeyFromHeaders, syncActiveKeyFromMeta } from "@/lib/aiKeySync";
 
 const DEEPSEARCH_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/deepsearch`;
 
@@ -35,6 +38,9 @@ const initialState: DeepSearchState = {
 export function useDeepSearch() {
   const [state, setState] = useState<DeepSearchState>(initialState);
   const abortRef = useRef<AbortController | null>(null);
+  // Выбор провайдера и ключей — общий с чатом (синхронизация через localStorage).
+  const { provider } = useAiProvider();
+  const { keys: userKeys, activeIndex: userKeyIndex, setActiveIndex: setActiveKeyIndex } = useUserApiKeys();
 
   const reset = useCallback(() => {
     setState((prev) => ({ ...initialState, used: prev.used }));
@@ -51,13 +57,15 @@ export function useDeepSearch() {
       const resp = await fetch(DEEPSEARCH_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(await getEdgeAuthHeaders()) },
-        body: JSON.stringify({ action: "clarify", query }),
+        body: JSON.stringify({ action: "clarify", query, provider, userKeys, userKeyIndex }),
       });
 
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({}));
         throw new Error(err.error || `HTTP ${resp.status}`);
       }
+
+      syncActiveKeyFromHeaders(resp.headers, setActiveKeyIndex);
 
       const data = await resp.json();
       setState((prev) => ({
@@ -71,7 +79,7 @@ export function useDeepSearch() {
       toast.error("Ошибка при генерации вопросов");
       setState((prev) => ({ ...prev, phase: "error", statusMessage: "Ошибка" }));
     }
-  }, []);
+  }, [provider, userKeys, userKeyIndex, setActiveKeyIndex]);
 
   const startSearch = useCallback(async (query: string, answers: string) => {
     setState((prev) => ({
@@ -89,7 +97,7 @@ export function useDeepSearch() {
       const resp = await fetch(DEEPSEARCH_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(await getEdgeAuthHeaders()) },
-        body: JSON.stringify({ action: "search", query, answers }),
+        body: JSON.stringify({ action: "search", query, answers, provider, userKeys, userKeyIndex }),
         signal: controller.signal,
       });
 
@@ -138,6 +146,12 @@ export function useDeepSearch() {
               setState((prev) => ({ ...prev, phase: "analyzing", report: prev.report + parsed.content }));
             } else if (event === "sources") {
               setState((prev) => ({ ...prev, sources: parsed.sources || [] }));
+            } else if (event === "meta") {
+              // Итог поиска: какой бэкенд и ключ реально сработали.
+              const source = syncActiveKeyFromMeta(parsed, setActiveKeyIndex);
+              if (parsed.provider === "gemini" && source === "server" && userKeys.length > 0) {
+                toast.info("Квота ваших ключей исчерпана — поиск выполнен через серверный ключ");
+              }
             } else if (event === "error") {
               toast.error(parsed.message || "Ошибка поиска");
               setState((prev) => ({ ...prev, phase: "error" }));
@@ -155,7 +169,7 @@ export function useDeepSearch() {
     }
 
     abortRef.current = null;
-  }, []);
+  }, [provider, userKeys, userKeyIndex, setActiveKeyIndex]);
 
   const stopSearch = useCallback(() => {
     abortRef.current?.abort();

@@ -2,6 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BookOpen, Loader2, Trash2, Volume2, X } from "lucide-react";
 import { AudioPlayer } from "@/components/AudioPlayer";
 import { getEdgeAuthHeaders } from "@/lib/edgeAuth";
+import { useAiProvider } from "@/hooks/useAiProvider";
+import { useUserApiKeys } from "@/hooks/useUserApiKeys";
+import { syncActiveKeyFromHeaders } from "@/lib/aiKeySync";
 import { announceStopSpeech } from "@/lib/speechEvents";
 import {
   ACCEPTED_PAGE_ACCEPT,
@@ -61,6 +64,9 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
   );
   /** id страницы + url озвучки, которую запустили только что. Сбрасывается при закрытии. */
   const [autoPlayKey, setAutoPlayKey] = useState<string | null>(null);
+  // Анализ и озвучка идут через выбранный в настройках провайдер.
+  const { provider } = useAiProvider();
+  const { keys: userKeys, activeIndex: userKeyIndex, setActiveIndex } = useUserApiKeys();
 
   const pagesRef = useRef(pages);
   pagesRef.current = pages;
@@ -127,18 +133,19 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
     });
   }, []);
 
-  const post = useCallback(async (path: string, body: unknown) => {
+  const post = useCallback(async (path: string, body: Record<string, unknown>) => {
     const res = await fetch(`${endpoint}/${path}`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...(await getEdgeAuthHeaders()) },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ ...body, provider, userKeys, userKeyIndex }),
     });
     if (!res.ok) {
       const info = await res.json().catch(() => ({}));
       throw new Error(info?.error || `Ошибка ${res.status}`);
     }
+    syncActiveKeyFromHeaders(res.headers, setActiveIndex);
     return res;
-  }, []);
+  }, [provider, userKeys, userKeyIndex, setActiveIndex]);
 
   const analyze = useCallback(async () => {
     const batch = pagesRef.current.filter((p) => p.status !== "ready").slice(0, ANALYZE_BATCH_SIZE);
