@@ -33,6 +33,17 @@ describe("dev-прокси для edge-функций", () => {
   it("в сборке остаётся абсолютный адрес проекта", () => {
     expect(edgeAuth).toContain("SUPABASE_FUNCTIONS_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`");
   });
+
+  it("сбой прокси виден как причина, а не пустой «Ошибка 500»", () => {
+    // Песочницы/превью часто не имеют выхода к *.supabase.co: без тела `{ error }`
+    // клиент показывает только код ответа, и непонятно, кто виноват — api или сеть.
+    expect(viteConfig).toContain('proxy.on("error"');
+    expect(viteConfig).toContain("Dev-прокси не достучался до Supabase");
+    expect(viteConfig).toContain("res.writeHead(502");
+    expect(viteConfig).toContain('"Content-Type": "application/json"');
+    // Ответ с причиной уходит, только если заголовки ещё не отправлены.
+    expect(viteConfig).toContain("res.headersSent");
+  });
 });
 
 describe("таймаут и повтор запроса", () => {

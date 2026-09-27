@@ -22,6 +22,36 @@ export default defineConfig(({ mode }) => {
           target: `${supabaseUrl}/functions/v1`,
           changeOrigin: true,
           secure: true,
+          /**
+           * Прокси отвечает читаемой причиной, если сам не достучался до Supabase.
+           *
+           * Без этого браузер получает пустой `500 text/plain`, а клиент — нечего
+           * показать кроме «Ошибка 500»: в песочницах/превью выход к
+           * `*.supabase.co` закрыт, и запрос до функции не доходит вовсе. С телом
+           * `{ error }` пользователь видит настоящую причину (прокси, а не api),
+           * а `edgeAuth` разбирает её как любой другой ответ сервера.
+           */
+          configure(proxy: {
+            on: (event: string, handler: (...args: unknown[]) => void) => void;
+          }) {
+            proxy.on("error", (...args: unknown[]) => {
+              const err = args[0] as Error | undefined;
+              const res = args[2] as
+                | {
+                    headersSent?: boolean;
+                    writeHead?: (code: number, headers: Record<string, string>) => void;
+                    end?: (body?: string) => void;
+                  }
+                | undefined;
+              if (!res || !res.writeHead || !res.end || res.headersSent) return;
+              res.writeHead(502, { "Content-Type": "application/json" });
+              res.end(
+                JSON.stringify({
+                  error: `Dev-прокси не достучался до Supabase: ${err?.message ?? "сеть недоступна"}. Запрос к функции не уходил — проверьте выход в сеть там, где запущен dev-сервер.`,
+                })
+              );
+            });
+          },
         },
       }
     : undefined;
