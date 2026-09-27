@@ -249,7 +249,11 @@
 /* Озвучиватель манги: кольцо-прогресс, орбита этапов и диалог по ролям.
    Повторяет процесс-анимацию дизайн-примера, но на токенах темы. */
 
-.manga-progress {
+/* Процесс с орбитальной анимацией — общий вид для озвучивателя манги и студии
+   видео-историй (компонент OrbitProgress): конический градиент показывает
+   процент, узлы этапов вращаются по орбите, искры мерцают. */
+
+.orbit-progress {
   display: flex;
   align-items: center;
   gap: 18px;
@@ -262,7 +266,7 @@
   animation: fade-in-up 0.35s ease-out;
 }
 
-.manga-orbit {
+.orbit-field {
   position: relative;
   display: grid;
   width: 124px;
@@ -271,14 +275,14 @@
   place-items: center;
 }
 
-.manga-ring {
+.orbit-ring {
   position: absolute;
   inset: 6px;
   border: 1px solid hsl(var(--interactive) / 0.22);
   border-radius: 50%;
 }
 
-.manga-ring::before {
+.orbit-ring::before {
   position: absolute;
   inset: 12px;
   border: 1px dashed hsl(var(--interactive) / 0.28);
@@ -286,20 +290,13 @@
   content: "";
 }
 
-.manga-orbiting {
-  position: absolute;
-  inset: 0;
-}
+.orbit-track { position: absolute; inset: 0; }
 
-.manga-orbit.is-active .manga-orbiting {
-  animation: manga-rotate 13s linear infinite;
-}
+.orbit-field.is-active .orbit-track { animation: orbit-rotate 13s linear infinite; }
 
-.manga-orbit.is-active .manga-orb {
-  animation: manga-counter-rotate 13s linear infinite;
-}
+.orbit-field.is-active .orbit-node { animation: orbit-counter-rotate 13s linear infinite; }
 
-.manga-orb {
+.orbit-node {
   position: absolute;
   display: grid;
   width: 30px;
@@ -310,15 +307,17 @@
   background: hsl(var(--card));
   box-shadow: 0 8px 20px hsl(var(--foreground) / 0.12);
   color: hsl(var(--interactive));
+  font-size: 14px;
+  line-height: 1;
 }
 
-.manga-orb.one { top: 0; left: 47px; }
-.manga-orb.two { top: 47px; right: 0; }
-.manga-orb.three { bottom: 0; left: 47px; }
-.manga-orb.four { top: 47px; left: 0; }
+.orbit-node.one { top: 0; left: 47px; }
+.orbit-node.two { top: 47px; right: 0; }
+.orbit-node.three { bottom: 0; left: 47px; }
+.orbit-node.four { top: 47px; left: 0; }
 
-.manga-progress-ring {
-  --manga-progress: 0%;
+.orbit-dial {
+  --orbit-progress: 0%;
 
   position: relative;
   z-index: 1;
@@ -329,13 +328,13 @@
   border-radius: 50%;
   background:
     radial-gradient(circle, hsl(var(--card)) 62%, transparent 64%),
-    conic-gradient(hsl(var(--interactive)) var(--manga-progress), hsl(var(--muted)) 0);
+    conic-gradient(hsl(var(--interactive)) var(--orbit-progress), hsl(var(--muted)) 0);
   transition: background 0.5s ease;
 }
 
-.manga-progress-inner { text-align: center; }
+.orbit-dial-inner { text-align: center; }
 
-.manga-percent {
+.orbit-percent {
   display: block;
   font-size: 24px;
   font-weight: 700;
@@ -344,50 +343,59 @@
   font-variant-numeric: tabular-nums;
 }
 
-.manga-progress-label {
+.orbit-state {
   display: block;
   margin-top: 2px;
   color: hsl(var(--muted-foreground));
   font-size: 10px;
 }
 
-.manga-sparkle {
+.orbit-sparkle {
   position: absolute;
   color: hsl(var(--interactive));
   opacity: 0.7;
 }
 
-.manga-orbit.is-active .manga-sparkle {
-  animation: manga-twinkle 2s ease-in-out infinite alternate;
+.orbit-field.is-active .orbit-sparkle { animation: orbit-twinkle 2s ease-in-out infinite alternate; }
+
+.orbit-sparkle.a { top: 14px; right: 12px; }
+.orbit-sparkle.b { bottom: 12px; left: 10px; animation-delay: 0.8s; }
+
+.orbit-text { min-width: 0; }
+
+.orbit-step {
+  display: inline-block;
+  margin-bottom: 6px;
+  padding: 2px 8px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 999px;
+  color: hsl(var(--muted-foreground));
+  font-size: 10px;
+  letter-spacing: 0.12em;
 }
 
-.manga-sparkle.a { top: 14px; right: 12px; }
-.manga-sparkle.b { bottom: 12px; left: 10px; animation-delay: 0.8s; }
-
-.manga-progress-text { min-width: 0; }
-
-.manga-progress-title {
+.orbit-label {
   margin: 0;
   color: hsl(var(--foreground));
   font-size: 13px;
   font-weight: 600;
 }
 
-.manga-progress-detail {
+.orbit-detail {
   margin: 4px 0 0;
   color: hsl(var(--muted-foreground));
   font-size: 11px;
 }
 
-@keyframes manga-rotate {
+@keyframes orbit-rotate {
   to { transform: rotate(360deg); }
 }
 
-@keyframes manga-counter-rotate {
+@keyframes orbit-counter-rotate {
   to { transform: rotate(-360deg); }
 }
 
-@keyframes manga-twinkle {
+@keyframes orbit-twinkle {
   from { opacity: 0.35; transform: scale(0.8); }
   to { opacity: 1; transform: scale(1.2); }
 }
@@ -435,18 +443,18 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .manga-orbit.is-active .manga-orbiting,
-  .manga-orbit.is-active .manga-orb,
-  .manga-orbit.is-active .manga-sparkle {
+  .orbit-field.is-active .orbit-track,
+  .orbit-field.is-active .orbit-node,
+  .orbit-field.is-active .orbit-sparkle {
     animation: none;
   }
 }
 
 @media (max-width: 480px) {
-  .manga-progress { gap: 12px; padding: 12px; }
-  .manga-orbit { width: 104px; height: 104px; flex-basis: 104px; }
-  .manga-progress-ring { width: 78px; height: 78px; }
-  .manga-orb { width: 26px; height: 26px; }
-  .manga-orb.one, .manga-orb.three { left: 39px; }
-  .manga-orb.two, .manga-orb.four { top: 39px; }
+  .orbit-progress { gap: 12px; padding: 12px; }
+  .orbit-field { width: 104px; height: 104px; flex-basis: 104px; }
+  .orbit-dial { width: 78px; height: 78px; }
+  .orbit-node { width: 26px; height: 26px; }
+  .orbit-node.one, .orbit-node.three { left: 39px; }
+  .orbit-node.two, .orbit-node.four { top: 39px; }
 }

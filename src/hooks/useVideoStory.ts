@@ -150,6 +150,11 @@ export function useVideoStory({ onShare, deps = browserDeps, title }: UseVideoSt
   const [error, setError] = useState("");
   const [failure, setFailure] = useState<MangaFailure | null>(null);
   const [video, setVideo] = useState<RenderedVideo | null>(null);
+  /**
+   * Таймлайн собранного видео: по нему плеер показывает субтитры и переключает
+   * слайды (начало каждого слайда = конец предыдущей реплики).
+   */
+  const [frames, setFrames] = useState<StoryFrame[]>([]);
   /** Object URL готового видео — для плеера. */
   const [videoUrl, setVideoUrl] = useState("");
   /** Слайд, который сейчас предпрослушивается. */
@@ -168,6 +173,8 @@ export function useVideoStory({ onShare, deps = browserDeps, title }: UseVideoSt
   charactersRef.current = characters;
   const tracksRef = useRef(tracks);
   tracksRef.current = tracks;
+  const framesRef = useRef(frames);
+  framesRef.current = frames;
 
   const runIdRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
@@ -221,6 +228,7 @@ export function useVideoStory({ onShare, deps = browserDeps, title }: UseVideoSt
     }
     setVideoUrl("");
     setVideo(null);
+    setFrames([]);
   }, []);
 
   // Размонтирование: гасим незакрытый запрос, предпросмотр и все object URL.
@@ -311,10 +319,12 @@ export function useVideoStory({ onShare, deps = browserDeps, title }: UseVideoSt
       slidesRef.current = [...slidesRef.current, ...nextSlides];
       setSlides(slidesRef.current);
       setScript((prev) => ({ ...prev, ...nextScript }));
+      // Материалы изменились — прежний файл истории больше не соответствует.
+      clearVideo();
       setError(notices.join("; "));
       return nextSlides.length;
     },
-    []
+    [clearVideo]
   );
 
   /** Убирает слайд вместе с его превью, дорожкой и репликой. */
@@ -641,6 +651,8 @@ export function useVideoStory({ onShare, deps = browserDeps, title }: UseVideoSt
         Object.entries(collected).map(([slideId, track]) => [slideId, track.seconds])
       );
       const frames: StoryFrame[] = planTimeline(items, secondsById);
+      framesRef.current = frames;
+      setFrames(frames);
 
       // Картинки для холста: без них запись не начнётся.
       const recorderSlides: Record<string, RecorderSlide> = {};
@@ -822,6 +834,7 @@ export function useVideoStory({ onShare, deps = browserDeps, title }: UseVideoSt
     setSlideIssues([]);
     setVideo(null);
     setVideoUrl("");
+    setFrames([]);
     setCharacters(defaultCharacters());
     setStage(1);
     setPercent(0);
@@ -873,6 +886,7 @@ export function useVideoStory({ onShare, deps = browserDeps, title }: UseVideoSt
     // результат
     video,
     videoUrl,
+    frames,
     download,
     share,
     error,
