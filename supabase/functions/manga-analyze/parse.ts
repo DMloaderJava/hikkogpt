@@ -127,3 +127,98 @@ export function upstreamErrorMessage(status: number): string {
   if (status >= 500) return "Сервис анализа временно недоступен, попробуйте снова.";
   return `Ошибка анализа изображений (${status})`;
 }
+
+/**
+ * Смена api анализа: имена из переключателя (те же, что в чате) → модель шлюза.
+ *
+ * Клиент присылает понятное имя («HikkoGPT Smart»), а конкретный
+ * провайдер/модель выбирается здесь — как в `chat`. Имя не из списка (старая
+ * версия клиента, левый запрос) не ломает анализ: берётся модель по умолчанию.
+ */
+export const MANGA_MODEL_MAP: Record<string, string> = {
+  HikkoGPT: "google/gemini-3.1-pro-preview",
+  "HikkoGPT Smart": "google/gemini-3-flash-preview",
+  "HikkoGPT Turbo": "google/gemini-3-flash-preview",
+  Спорящий: "google/gemini-3.1-flash-lite-preview",
+};
+
+export const DEFAULT_MANGA_MODEL = "google/gemini-3-flash-preview";
+export const MANGA_API_NAMES = Object.keys(MANGA_MODEL_MAP);
+
+export function toAiModel(model: unknown): string {
+  if (typeof model !== "string") return DEFAULT_MANGA_MODEL;
+  return MANGA_MODEL_MAP[model] ?? DEFAULT_MANGA_MODEL;
+}
+
+/**
+ * Модель шлюза → модель прямого Google Gemini (запасной api).
+ *
+ * Тот же маппинг, что в `chat`, потому что ключи `GEMINI_API_KEYS` общие; все
+ * перечисленные модели понимают изображения, а анализ манги без них не работает.
+ */
+export function toGoogleModel(aiModel: string): string {
+  const m = typeof aiModel === "string" ? aiModel : "";
+  if (m.includes("3.1-pro")) return "gemini-2.0-flash-exp";
+  if (m.includes("3-flash")) return "gemini-2.0-flash";
+  if (m.includes("2.5-pro")) return "gemini-1.5-pro";
+  if (m.includes("2.5-flash")) return "gemini-1.5-flash";
+  if (m.includes("flash-lite")) return "gemini-2.0-flash";
+  return "gemini-2.0-flash";
+}
+
+/** Те же mime, что принимает `validateImages`: запасной api не должен видеть то, что основной отверг бы. */
+const INLINE_DATA_URL_RE = /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/]+={0,2})$/i;
+
+/**
+ * dataURL страницы → `inline_data` прямого api Gemini.
+ *
+ * Шлюз Lovable принимает OpenAI-формат `image_url`, а Google — свой; без этого
+ * перехода запасной api получил бы страницы текстом и вернул пустой разбор.
+ */
+export function dataUrlToInlineData(url: string): { mime_type: string; data: string } | null {
+  const match = typeof url === "string" ? url.match(INLINE_DATA_URL_RE) : null;
+  if (!match) return null;
+  return { mime_type: `image/${match[1].toLowerCase()}`, data: match[2] };
+}
+
+/**
+ * Тело запроса к запасному api (прямой Gemini): системный промпт тот же, что и
+ * для основного, страницы — `inline_data`. null, если хоть одну страницу не
+ * удалось перевести (тогда запасной api не дёргаем вовсе).
+ */
+export function geminiAnalyzeBody(
+  systemPrompt: string,
+  images: string[],
+  pageCount: number
+): { systemInstruction: { parts: { text: string }[] }; contents: { role: string; parts: unknown[] }[] } | null {
+  const parts: unknown[] = [{ text: `Проанализируй ${pageCount} страниц манги по порядку.` }];
+  for (const image of images) {
+    const inline = dataUrlToInlineData(image);
+    if (!inline) return null;
+    parts.push({ inline_data: inline });
+  }
+
+  return {
+    systemInstruction: { parts: [{ text: systemPrompt }] },
+    contents: [{ role: "user", parts }],
+  };
+}
+
+/** Текст ответа прямого Gemini (`candidates[0].content.parts[].text`). */
+export function geminiText(result: unknown): string {
+  const parts = (result as { candidates?: { content?: { parts?: { text?: unknown }[] } }[] } | null)?.candidates?.[0]
+    ?.content?.parts;
+  if (!Array.isArray(parts)) return "";
+  return parts
+    .map((part) => (typeof part?.text === "string" ? part.text : ""))
+    .filter(Boolean)
+    .join("");
+}
+
+/**
+ * Когда основной api стоит сменить на запасной: лимиты/оплата/сбой сервиса.
+ * 4xx вроде 400 и 401 — ошибка запроса или ключа, повтор через Gemini её не чинит.
+ */
+export function shouldSwitchApi(status: number): boolean {
+  return status === 402 || status === 429 || status >= 500;
+}

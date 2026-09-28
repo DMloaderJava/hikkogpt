@@ -164,7 +164,10 @@ describe("всё на gemini: проводка фронтенда", () => {
       "src/hooks/useDeepSearch.ts",
       "src/components/MessageBubble.tsx",
       "src/components/DialogTtsModal.tsx",
-      "src/components/MangaVoiceModal.tsx",
+      // Логика манги и студии видео живёт в хуках (окна — тонкий UI), поэтому
+      // provider и ключи проверяем там, где запросы собираются.
+      "src/hooks/useMangaVoice.ts",
+      "src/hooks/useVideoStory.ts",
     ]) {
       const src = readSource(path);
       expect(src, `${path}: нет provider`).toContain("provider");
@@ -172,5 +175,8 @@ describe("всё на gemini: проводка фронтенда", () => {
       expect(src, `${path}: нет userKeyIndex`).toContain("userKeyIndex");
       expect(src, `${path}: нет syncActiveKey`).toContain("syncActiveKey");
     }
+
+    // Окно манги запросы не собирает — оно работает через хук.
+    expect(readSource("src/components/MangaVoiceModal.tsx")).toContain("useMangaVoice({");
   });
 });

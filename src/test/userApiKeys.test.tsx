@@ -197,9 +197,12 @@ describe("ключи: сквозная проводка", () => {
     const hook = readSource("src/hooks/useChat.ts");
     expect(hook).toContain("userKeys: userGeminiKeys");
     expect(hook).toContain("userKeyIndex: activeKeyIndex");
-    expect(hook).toContain("x-ai-key-source");
-    expect(hook).toContain("x-ai-key-index");
+    // Заголовки ответа разбирает общий хелпер — он же используется мангой и озвучкой.
+    expect(hook).toContain("syncActiveKeyFromHeaders(resp.headers, setActiveKeyIndex)");
     expect(hook).toContain("setActiveKeyIndex");
+    const keySync = readSource("src/lib/aiKeySync.ts");
+    expect(keySync).toContain("x-ai-key-source");
+    expect(keySync).toContain("x-ai-key-index");
   });
 
   it("Index пробрасывает ключи в настройки", () => {

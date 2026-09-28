@@ -368,6 +368,7 @@ const Index = () => {
             voiceModeStatus={live.status}
             onToggleVoiceMode={handleToggleVoiceMode}
             userEmail={user?.email}
+            selectedModel={selectedModel}
           />
         </div>
       </div>

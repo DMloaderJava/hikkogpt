@@ -4,6 +4,8 @@ import {
   extractJson,
   MAX_IMAGES,
   normalizePages,
+  toAiModel,
+  toGoogleModel,
   upstreamErrorMessage,
   validateImages,
 } from './parse.ts';
@@ -32,8 +34,36 @@ const json = (body: unknown, status = 200, extraHeaders: Record<string, string> 
 /** Сколько ждём модель: wall-clock лимит edge-функции на Free — 150 с. */
 const UPSTREAM_TIMEOUT_MS = 120_000;
 
-const SYSTEM_PROMPT =
-  'Ты анализируешь мангу. Ответь ТОЛЬКО валидным JSON: {"pages":[{"description":"краткое описание сцены на русском","transcript":"Speaker 1: текст\\nSpeaker 2: текст"}]}. Ровно один элемент pages на каждое изображение в том же порядке. Сохраняй номера говорящих персонажей между страницами. Передай видимые реплики на русском; если текста нет, придумай краткую реплику по сцене и обозначь это в description. Не более 8 персонажей. Без markdown.';
+/**
+ * Системный промпт анализа — один для обоих бэкендов (шлюз Lovable и прямой
+ * Google Gemini), поэтому смена провайдера или api не меняет формат реплик.
+ */
+const SYSTEM_PROMPT = [
+  'Ты анализируешь страницы манги и возвращаешь ТОЛЬКО валидный JSON вида:',
+  '{"pages":[{"description":"...","transcript":"..."}]}',
+  '',
+  'Поле transcript — это реплики страницы, СТРОГО в таком формате (номер — реальная цифра, не буква N):',
+  'Speaker 1: Ребята, начинаем?',
+  '',
+  'Speaker 2: Я сказала тебе прекратить!',
+  '',
+  'Speaker 3: Ладно, ладно, понял.',
+  '',
+  'Speaker 4: Вы оба довольно забавные.',
+  '',
+  'Правила transcript:',
+  '- каждая реплика начинается с новой строки как «Speaker <номер>: <текст>» — номер от 1 до 8, конкретные цифры;',
+  '- между репликами одна пустая строка;',
+  '- персонажи без слов получают «Speaker <номер>: (без слов)»;',
+  '- номера одного и того же персонажа одинаковы на всех страницах;',
+  '- все видимые реплики передай на русском; если текста в кадре нет — придумай краткую реплику по сцене;',
+  '- никаких описаний, комментариев, имён вида «Рассказчик:», тире в начале строки, markdown, кавычек вокруг реплик и переводов строк внутри реплики;',
+  '- максимум 8 персонажей.',
+  '',
+  'Поле description — краткое описание сцены на русском (кто где, что происходит, кто говорит). Оно нужно только для стабильных номеров персонажей: в transcript его текст попадать не должен.',
+  '',
+  'Ответ — только JSON: без markdown-заборов, без пояснений до и после, без полей кроме description и transcript. Ровно один элемент pages на каждое изображение, в том же порядке.',
+].join('\n');
 
 const VISION_MODELS = [
   ...new Set([Deno.env.get("GEMINI_VISION_MODEL") || "gemini-2.5-flash", "gemini-2.0-flash"]),
@@ -50,9 +80,12 @@ serve(async (req) => {
     const { data, error } = await sb.auth.getUser(token);
     if (error || !data.user) return json({ error: 'Unauthorized' }, 401);
 
-    const { images, provider, userKeys, userKeyIndex } = await req.json();
+    const { images, model, provider, userKeys, userKeyIndex } = await req.json();
     const validated = validateImages(images);
     if (!validated.ok) return json({ error: validated.error }, 400);
+
+    /** Смена api: имя из переключателя клиента → конкретная модель шлюза. */
+    const aiModel = toAiModel(model);
 
     const requestedProvider: AiProvider = parseProvider(provider);
     const key = Deno.env.get('LOVABLE_API_KEY');
@@ -65,7 +98,8 @@ serve(async (req) => {
 
     const userText = `Проанализируй ${validated.images.length} страниц манги по порядку.`;
     const lovableBody = {
-      model: 'google/gemini-3-flash-preview',
+      // Модель выбирает клиент (переключатель api); имя уже проверено в toAiModel.
+      model: aiModel,
       stream: false,
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
@@ -88,6 +122,12 @@ serve(async (req) => {
       ],
       generationConfig: { responseMimeType: 'application/json' },
     };
+
+    /**
+     * Прямой Gemini: сначала модель, соответствующая выбранному api, затем
+     * обычные vision-модели — так смена api заметна обоим бэкендам.
+     */
+    const geminiModels = [...new Set([toGoogleModel(aiModel), ...VISION_MODELS])];
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
@@ -119,7 +159,7 @@ serve(async (req) => {
             }
             if (!response.ok) {
               const detail = await response.text().catch(() => '');
-              console.error(`manga-analyze lovable [${response.status}]:`, detail.slice(0, 2000));
+              console.error(`manga-analyze lovable [${response.status}] (api: ${aiModel}):`, detail.slice(0, 2000));
               lastStatus = response.status === 429 ? 429 : 502;
               throw new Error(upstreamErrorMessage(response.status));
             }
@@ -132,7 +172,7 @@ serve(async (req) => {
             }
             raw = content;
           } else if (backend === 'gemini' && attempts.length > 0) {
-            const res = await geminiGenerate(attempts, VISION_MODELS, geminiBody, {
+            const res = await geminiGenerate(attempts, geminiModels, geminiBody, {
               signal: controller.signal,
               label: "manga-analyze",
             });

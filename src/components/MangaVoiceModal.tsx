@@ -1,90 +1,93 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BookOpen, Loader2, Trash2, Volume2, X } from "lucide-react";
+/**
+ * Окно «Озвучиватель манги».
+ *
+ * Вся работа с запросами и состоянием страниц живёт в `useMangaVoice` — хук
+ * построен по образцу `useChat` (отправка сообщения): единые заголовки и
+ * обработка ошибок, `AbortController` с кнопкой «Стоп», точная причина сбоя
+ * («Ошибка запроса api (этап: причина)») в плашке и в toast. Компонент здесь
+ * отвечает за представление и за то, чтобы процесс было видно: кольцо-прогресс
+ * с орбитой этапов, бейдж «Этап N из 5», плавное появление карточек.
+ *
+ * Раскладка кадра: реплики → плеер с озвучкой → страница поверх (изображение
+ * остаётся главным элементом кадра).
+ */
+
+import { useEffect, useState } from "react";
+import { BookOpen, Loader2, Pencil, Square, Trash2, Volume2, X } from "lucide-react";
 import { AudioPlayer } from "@/components/AudioPlayer";
-import { getEdgeAuthHeaders } from "@/lib/edgeAuth";
-import { useAiProvider } from "@/hooks/useAiProvider";
-import { useUserApiKeys } from "@/hooks/useUserApiKeys";
-import { syncActiveKeyFromHeaders } from "@/lib/aiKeySync";
-import { announceStopSpeech } from "@/lib/speechEvents";
-import {
-  ACCEPTED_PAGE_ACCEPT,
-  ANALYZE_BATCH_SIZE,
-  filterPageFiles,
-  formatRejections,
-  toPageDataURL,
-} from "@/lib/mangaPages";
-import {
-  MAX_TTS_SPEAKERS,
-  TTS_VOICES,
-  defaultVoiceFor,
-  planTranscript,
-} from "@/lib/mangaTranscript";
-import type { TtsVoice } from "@/lib/mangaTranscript";
-
-const endpoint = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
-
-type PageStatus = "new" | "analyzing" | "ready";
-
-interface Page {
-  id: string;
-  file: File;
-  /** Превью страницы (object URL). Отзывается при удалении страницы и на unmount. */
-  url: string;
-  status: PageStatus;
-  description?: string;
-  transcript?: string;
-  /** Готовая озвучка кадра (object URL). */
-  audio?: string;
-}
+import { MangaApiSelector } from "@/components/MangaApiSelector";
+import { MangaProgressRing } from "@/components/MangaProgress";
+import { MANGA_STEPS_TOTAL, useMangaVoice, type MangaPage } from "@/hooks/useMangaVoice";
+import { ACCEPTED_PAGE_ACCEPT, ANALYZE_BATCH_SIZE } from "@/lib/mangaPages";
+import { MAX_TTS_SPEAKERS, TTS_VOICES, planTranscript, type TtsVoice } from "@/lib/mangaTranscript";
+import type { STAGE_LABELS } from "@/lib/mangaRequestError";
 
 interface MangaVoiceModalProps {
   open: boolean;
   onClose: () => void;
+  /** Модель чата: пока в окне манги не выбрали своё api, анализируем ею. */
+  chatModel?: string;
 }
 
-let pageSeq = 0;
-const nextPageId = () => `manga-page-${Date.now().toString(36)}-${(pageSeq += 1)}`;
+/** Реплики страницы как диалог по ролям: «Speaker 1» + текст + чей голос. */
+function DialogLines({ page, voices }: { page: MangaPage; voices: Record<string, TtsVoice> }) {
+  const plan = planTranscript(page.transcript ?? "");
+  if (!plan.lines.length) return null;
 
-function releasePage(page: Pick<Page, "url" | "audio">) {
-  try {
-    URL.revokeObjectURL(page.url);
-    if (page.audio) URL.revokeObjectURL(page.audio);
-  } catch {
-    // URL уже отозван — не критично
-  }
+  return (
+    <div className="manga-dialog" data-testid={`manga-dialog-${page.id}`}>
+      {plan.lines.map((line, i) => (
+        <div className="manga-dialog-line" key={`${line.speaker}-${i}`} style={{ animationDelay: `${Math.min(i, 8) * 30}ms` }}>
+          <span className="manga-dialog-speaker">
+            Speaker {line.speaker}
+            {plan.names[line.speaker] ? ` · ${plan.names[line.speaker]}` : ""}
+          </span>
+          <span className="manga-dialog-text">{line.text}</span>
+          <span className="sr-only">Голос: {voices[String(line.speaker)] ?? TTS_VOICES[(line.speaker - 1) % TTS_VOICES.length]}</span>
+        </div>
+      ))}
+    </div>
+  );
 }
 
-export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
-  const [pages, setPages] = useState<Page[]>([]);
-  const [analyzing, setAnalyzing] = useState(false);
-  const [speakingId, setSpeakingId] = useState<string | null>(null);
-  const [error, setError] = useState("");
-  const [voices, setVoices] = useState<Record<string, TtsVoice>>(() =>
-    Object.fromEntries(TTS_VOICES.map((voice, i) => [String(i + 1), voice])) as Record<string, TtsVoice>
-  );
-  /** id страницы + url озвучки, которую запустили только что. Сбрасывается при закрытии. */
-  const [autoPlayKey, setAutoPlayKey] = useState<string | null>(null);
-  // Анализ и озвучка идут через выбранный в настройках провайдер.
-  const { provider } = useAiProvider();
-  const { keys: userKeys, activeIndex: userKeyIndex, setActiveIndex } = useUserApiKeys();
+export function MangaVoiceModal({ open, onClose, chatModel }: MangaVoiceModalProps) {
+  const {
+    pages,
+    voices,
+    apiModel,
+    setApiModel,
+    chapter,
+    readyPages,
+    pendingCount,
+    isAnalyzing,
+    analyzeProgress,
+    speakingId,
+    isRequesting,
+    error,
+    failure,
+    progress,
+    autoPlayKey,
+    addFiles,
+    removePage,
+    setTranscript,
+    setVoice,
+    analyzePages,
+    speakPage,
+    speakAll,
+    stop,
+  } = useMangaVoice({ preferredApi: chatModel });
 
-  const pagesRef = useRef(pages);
-  pagesRef.current = pages;
+  /** Какие страницы правятся вручную (после озвучки textarea скрыт). */
+  const [editingId, setEditingId] = useState<string | null>(null);
 
-  useEffect(
-    () => () => {
-      pagesRef.current.forEach(releasePage);
-    },
-    []
-  );
-
-  // При закрытии останавливаем звук и гасим автозапуск: иначе при повторном
-  // открытии все озвученные страницы стартуют одновременно.
+  // Закрытие окна останавливает запросы и глушит звук: ничего не должно
+  // озвучиваться «в пустоту» (тот же принцип, что и stopStreaming в чате).
+  // Страницы и уже готовая озвучка сохраняются в хуке — при повторном открытии
+  // окно показывает прежний результат, а не пустой список.
   useEffect(() => {
     if (open) return;
-    announceStopSpeech();
-    setAutoPlayKey(null);
-  }, [open]);
+    stop();
+  }, [open, stop]);
 
   useEffect(() => {
     if (!open) return;
@@ -95,160 +98,27 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
-  /** Все персонажи, которые встречаются в транскриптах главы. */
-  const chapter = useMemo(() => {
-    const speakers = new Set<number>();
-    const names: Record<number, string> = {};
-    for (const page of pages) {
-      if (page.status !== "ready") continue;
-      const plan = planTranscript(page.transcript ?? "");
-      plan.speakers.forEach((s) => speakers.add(s));
-      Object.entries(plan.names).forEach(([s, name]) => {
-        names[Number(s)] = name;
-      });
-    }
-    return { speakers: [...speakers].sort((a, b) => a - b).slice(0, MAX_TTS_SPEAKERS), names };
-  }, [pages]);
-
-  const readyPages = useMemo(() => pages.filter((p) => p.status === "ready"), [pages]);
-  const pendingCount = useMemo(() => pages.filter((p) => p.status !== "ready").length, [pages]);
-
-  const addFiles = useCallback((list: FileList | null) => {
-    const { accepted, rejected } = filterPageFiles(list);
-    const rejectionNote = formatRejections(rejected);
-    if (accepted.length) {
-      setPages((prev) => [
-        ...prev,
-        ...accepted.map((file) => ({ id: nextPageId(), file, url: URL.createObjectURL(file), status: "new" as const })),
-      ]);
-    }
-    setError(rejectionNote);
-  }, []);
-
-  const removePage = useCallback((id: string) => {
-    setPages((prev) => {
-      const target = prev.find((p) => p.id === id);
-      if (target) releasePage(target);
-      return prev.filter((p) => p.id !== id);
-    });
-  }, []);
-
-  const post = useCallback(async (path: string, body: Record<string, unknown>) => {
-    const res = await fetch(`${endpoint}/${path}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...(await getEdgeAuthHeaders()) },
-      body: JSON.stringify({ ...body, provider, userKeys, userKeyIndex }),
-    });
-    if (!res.ok) {
-      const info = await res.json().catch(() => ({}));
-      throw new Error(info?.error || `Ошибка ${res.status}`);
-    }
-    syncActiveKeyFromHeaders(res.headers, setActiveIndex);
-    return res;
-  }, [provider, userKeys, userKeyIndex, setActiveIndex]);
-
-  const analyze = useCallback(async () => {
-    const batch = pagesRef.current.filter((p) => p.status !== "ready").slice(0, ANALYZE_BATCH_SIZE);
-    if (!batch.length || analyzing) return;
-
-    const batchIds = new Set(batch.map((p) => p.id));
-    setAnalyzing(true);
-    setError("");
-    setPages((prev) => prev.map((p) => (batchIds.has(p.id) ? { ...p, status: "analyzing" } : p)));
-
-    try {
-      // Страницы уменьшаются до 1600 px и пережимаются: батч из 5 сканов по 10 МБ
-      // в base64 — это десятки мегабайт в одном запросе, он не проходит по лимитам.
-      const images = await Promise.all(batch.map((p) => toPageDataURL(p.file)));
-      const res = await post("manga-analyze", { images });
-      const data = await res.json();
-      const result: { description?: string; transcript?: string }[] = Array.isArray(data?.pages) ? data.pages : [];
-
-      setPages((prev) =>
-        prev.map((p) => {
-          const index = batch.findIndex((b) => b.id === p.id);
-          if (index < 0) return p;
-          const item = result[index];
-          if (!item) return { ...p, status: "new" };
-          return {
-            ...p,
-            status: "ready",
-            description: item.description ?? "",
-            transcript: item.transcript ?? "",
-          };
-        })
-      );
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Ошибка анализа");
-      setPages((prev) => prev.map((p) => (batchIds.has(p.id) && p.status === "analyzing" ? { ...p, status: "new" } : p)));
-    } finally {
-      setAnalyzing(false);
-    }
-  }, [analyzing, post]);
-
-  const synthesize = useCallback(
-    async (page: Page) => {
-      const plan = planTranscript(page.transcript ?? "");
-      if (plan.problems.length) {
-        setError(plan.problems[0]);
-        return false;
-      }
-
-      const res = await post("dialog-tts", { transcript: plan.text, voices });
-      const url = URL.createObjectURL(await res.blob());
-      setPages((prev) =>
-        prev.map((p) => {
-          if (p.id !== page.id) return p;
-          if (p.audio && p.audio !== url) URL.revokeObjectURL(p.audio);
-          return { ...p, audio: url };
-        })
-      );
-      setAutoPlayKey(`${page.id}:${url}`);
-      return true;
-    },
-    [post, voices]
-  );
-
-  const speak = useCallback(
-    async (page: Page) => {
-      setSpeakingId(page.id);
-      setError("");
-      announceStopSpeech();
-      try {
-        await synthesize(page);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Ошибка озвучки");
-      } finally {
-        setSpeakingId(null);
-      }
-    },
-    [synthesize]
-  );
-
-  const speakAll = useCallback(async () => {
-    const queue = pagesRef.current.filter((p) => p.status === "ready" && (p.transcript ?? "").trim());
-    if (!queue.length) return;
-    setError("");
-    announceStopSpeech();
-    for (const page of queue) {
-      setSpeakingId(page.id);
-      try {
-        await synthesize(page);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Ошибка озвучки");
-        break;
-      }
-    }
-    setSpeakingId(null);
-  }, [synthesize]);
-
   if (!open) return null;
 
-  const analyzeLabel = analyzing
-    ? "Анализирую…"
-    : pendingCount
-      ? `Анализировать страницы ${pages.length - pendingCount + 1}–${Math.min(pages.length - pendingCount + ANALYZE_BATCH_SIZE, pages.length)}`
-      : "Все страницы обработаны";
+  const analyzeLabel = (() => {
+    if (isAnalyzing) {
+      if (!analyzeProgress || analyzeProgress.preparing) return "Готовлю страницы к отправке…";
+      const from = analyzeProgress.done + 1;
+      const to = Math.min(analyzeProgress.done + ANALYZE_BATCH_SIZE, analyzeProgress.total);
+      const suffix = analyzeProgress.batches > 1 ? ` из ${analyzeProgress.total}` : "";
+      return `Анализирую страницы ${from}–${to}${suffix}…`;
+    }
+    if (!pages.length) return "Анализировать страницы";
+    if (!pendingCount) return "Все страницы обработаны";
+    const from = pages.length - pendingCount + 1;
+    const to = pages.length;
+    const batches = Math.ceil(pendingCount / ANALYZE_BATCH_SIZE);
+    return batches > 1
+      ? `Анализировать страницы ${from}–${to} (по ${ANALYZE_BATCH_SIZE} за запрос)`
+      : `Анализировать страницы ${from}–${to}`;
+  })();
+
+  const stageBadge = `ЭТАП ${progress.label.match(/Этап (\d+)/)?.[1] ?? 1} / ${MANGA_STEPS_TOTAL}`;
 
   return (
     <div
@@ -261,23 +131,34 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
         data-testid="manga-modal"
         className="w-full sm:max-w-2xl max-h-[90vh] overflow-y-auto scrollbar-thin rounded-t-2xl sm:rounded-2xl border border-border bg-background p-4 shadow-xl animate-slide-up"
       >
-        <div className="mb-3 flex items-center justify-between">
+        <div className="mb-3 flex items-center justify-between gap-2">
           <h2 className="flex items-center gap-2 text-base font-semibold text-foreground">
             <BookOpen className="h-4 w-4 text-interactive" />
             Озвучиватель манги
           </h2>
-          <button
-            onClick={onClose}
-            aria-label="Закрыть"
-            className="btn-interactive rounded-lg p-1.5 text-muted-foreground transition-all"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <div className="flex items-center gap-2">
+            {/* Смена api: какая модель разбирает страницы этой главы. */}
+            <MangaApiSelector value={apiModel} onChange={setApiModel} disabled={isRequesting} />
+            <span
+              data-testid="manga-stage"
+              className="rounded-full border border-border px-2.5 py-1 text-[10px] tracking-[0.12em] text-muted-foreground"
+            >
+              {stageBadge}
+            </span>
+            <button
+              onClick={onClose}
+              aria-label="Закрыть"
+              className="btn-interactive rounded-lg p-1.5 text-muted-foreground transition-all"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
 
         <p className="mb-2 text-xs text-muted-foreground">
-          Загрузите страницы по порядку. Анализируем по {ANALYZE_BATCH_SIZE} изображений, затем добавляйте следующие.
-          Каждая страница получит описание, реплики и отдельную озвучку.
+          Загрузите страницы по порядку — они разбираются батчами по {ANALYZE_BATCH_SIZE} изображений
+          за одно нажатие. Api в правом верхнем углу выбирает, какая модель возвращает реплики вида
+          «Speaker 1: …»; каждая страница получает свою озвучку.
         </p>
 
         <input
@@ -293,39 +174,73 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
           className="w-full text-sm"
         />
 
+        <div className="my-3">
+          <MangaProgressRing
+            percent={progress.percent}
+            label={progress.label}
+            detail={progress.detail}
+            active={isRequesting}
+            phase={progress.phase}
+          />
+          {/* Какого api этот запуск: во время запроса модель уже не меняется. */}
+          <p data-testid="manga-api-line" className="mt-2 text-center text-[11px] text-muted-foreground">
+            Api анализа: <span className="font-medium text-foreground">{analyzeProgress?.model ?? apiModel}</span>
+            {isRequesting ? " · до конца запроса не меняется" : ""}
+          </p>
+        </div>
+
         {pages.length > 0 && (
-          <div className="my-3 flex flex-wrap items-center gap-2">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
             <button
               data-testid="manga-analyze"
-              disabled={analyzing || pendingCount === 0}
-              onClick={analyze}
+              disabled={isAnalyzing || pendingCount === 0}
+              onClick={() => void analyzePages()}
               className="flex items-center gap-2 rounded-lg bg-interactive px-4 py-2 text-sm text-interactive-foreground transition-all disabled:opacity-50"
             >
-              {analyzing && <Loader2 className="h-4 w-4 animate-spin" />}
+              {isAnalyzing && <Loader2 className="h-4 w-4 animate-spin" />}
               {analyzeLabel}
             </button>
+
             {readyPages.length > 0 && (
               <button
                 data-testid="manga-speak-all"
-                disabled={speakingId !== null}
-                onClick={speakAll}
+                disabled={isRequesting}
+                onClick={() => void speakAll()}
                 className="flex items-center gap-2 rounded-lg bg-interactive/10 px-4 py-2 text-sm text-interactive transition-all disabled:opacity-50"
               >
                 {speakingId !== null ? <Loader2 className="h-4 w-4 animate-spin" /> : <Volume2 className="h-4 w-4" />}
                 Озвучить всё
               </button>
             )}
+
+            {isRequesting && (
+              <button
+                data-testid="manga-stop"
+                onClick={stop}
+                aria-label="Остановить"
+                className="flex items-center gap-2 rounded-lg bg-destructive/10 px-4 py-2 text-sm text-destructive transition-all hover:bg-destructive/20"
+              >
+                <Square className="h-3.5 w-3.5" fill="currentColor" />
+                Стоп
+              </button>
+            )}
           </div>
         )}
 
         {error && (
-          <p role="alert" className="mb-3 rounded-xl bg-destructive/10 px-3 py-2 text-xs text-destructive">
-            {error}
-          </p>
+          <div role="alert" className="mb-3 rounded-xl bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            <p data-testid="manga-error">{error}</p>
+            {failure && (
+              <p className="mt-1 text-[11px] text-destructive/80" data-testid="manga-error-stage">
+                Этап: {failure.stage}
+                {failure.status ? ` · код ответа ${failure.status}` : ""}
+              </p>
+            )}
+          </div>
         )}
 
         {chapter.speakers.length > 0 && (
-          <div className="mb-4 rounded-xl border border-border bg-secondary/40 p-3">
+          <div className="mb-4 rounded-xl border border-border bg-secondary/40 p-3 animate-fade-in-up">
             <p className="mb-2 text-xs font-medium text-foreground">Голоса персонажей</p>
             <div className="grid grid-cols-2 gap-2">
               {chapter.speakers.map((speaker) => (
@@ -334,10 +249,8 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
                   <select
                     data-testid={`manga-voice-${speaker}`}
                     aria-label={`Голос персонажа ${speaker}`}
-                    value={voices[String(speaker)] ?? defaultVoiceFor(speaker)}
-                    onChange={(e) =>
-                      setVoices((prev) => ({ ...prev, [String(speaker)]: e.target.value as TtsVoice }))
-                    }
+                    value={voices[String(speaker)] ?? TTS_VOICES[(speaker - 1) % TTS_VOICES.length]}
+                    onChange={(e) => setVoice(speaker, e.target.value as TtsVoice)}
                     className="mt-1 w-full rounded-lg border border-border bg-secondary/50 px-2 py-2 text-sm text-foreground focus:border-interactive/40 focus:outline-none transition-all"
                   >
                     {TTS_VOICES.map((voice) => (
@@ -349,6 +262,11 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
                 </label>
               ))}
             </div>
+            {chapter.speakers.length >= MAX_TTS_SPEAKERS && (
+              <p className="mt-2 text-[11px] text-muted-foreground">
+                Персонажей больше, чем голосов: часть из них делит голос с последним.
+              </p>
+            )}
           </div>
         )}
 
@@ -356,8 +274,14 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
           {pages.map((page, i) => {
             const plan = planTranscript(page.transcript ?? "");
             const busyWithPage = speakingId === page.id;
+            const voiced = !!page.audio;
             return (
-              <div key={page.id} data-testid={`manga-page-${i + 1}`} className="rounded-xl border border-border p-3">
+              <div
+                key={page.id}
+                data-testid={`manga-page-${i + 1}`}
+                className={`manga-page-card rounded-xl border border-border p-3 animate-fade-in-up ${voiced ? "is-voiced" : ""}`}
+                style={{ animationDelay: `${Math.min(i, 8) * 40}ms` }}
+              >
                 <div className="mb-2 flex items-center justify-between">
                   <p className="text-sm font-medium text-foreground">Страница {i + 1}</p>
                   <button
@@ -369,11 +293,14 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
                   </button>
                 </div>
 
-                <img
-                  src={page.url}
-                  alt={`Страница манги ${i + 1}`}
-                  className="max-h-96 w-full rounded-lg object-contain"
-                />
+                {/* Превью страницы: пока кадр ещё не озвучен. */}
+                {!voiced && (
+                  <img
+                    src={page.url}
+                    alt={`Страница манги ${i + 1}`}
+                    className="max-h-96 w-full rounded-lg object-contain"
+                  />
+                )}
 
                 {page.status === "analyzing" && (
                   <p className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
@@ -383,21 +310,8 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
 
                 {page.status === "ready" && (
                   <>
-                    {page.description && <p className="my-2 text-sm text-muted-foreground">{page.description}</p>}
-
-                    <textarea
-                      data-testid={`manga-transcript-${i + 1}`}
-                      aria-label={`Реплики страницы ${i + 1}`}
-                      value={page.transcript ?? ""}
-                      placeholder={"Аки: Ты опоздал\nРассказчик: Он всегда опаздывал."}
-                      onChange={(e) =>
-                        setPages((prev) =>
-                          prev.map((item) => (item.id === page.id ? { ...item, transcript: e.target.value } : item))
-                        )
-                      }
-                      rows={4}
-                      className="w-full resize-none rounded-lg border border-border bg-secondary/50 p-2 text-sm text-foreground focus:border-interactive/40 focus:outline-none transition-all"
-                    />
+                    {/* Реплики: диалог по ролям, та же разметка, что уходит в озвучку. */}
+                    <DialogLines page={page} voices={voices} />
 
                     {plan.problems.length > 0 && (
                       <p className="mt-1.5 text-[11px] text-destructive">{plan.problems[0]}</p>
@@ -408,27 +322,88 @@ export function MangaVoiceModal({ open, onClose }: MangaVoiceModalProps) {
                       </p>
                     )}
 
-                    <button
-                      data-testid={`manga-speak-${i + 1}`}
-                      disabled={speakingId !== null || plan.problems.length > 0}
-                      onClick={() => speak(page)}
-                      className="mt-2 flex items-center gap-2 rounded-lg bg-interactive px-3 py-2 text-sm text-interactive-foreground transition-all disabled:opacity-50"
-                    >
-                      {busyWithPage ? <Loader2 className="h-4 w-4 animate-spin" /> : <Volume2 className="h-4 w-4" />}
-                      {page.audio ? "Переозвучить кадр" : "Озвучить кадр"}
-                    </button>
+                    {page.voiceError && (
+                      <p data-testid={`manga-voice-error-${i + 1}`} className="mt-1.5 text-[11px] text-destructive">
+                        {page.voiceError}
+                      </p>
+                    )}
 
-                    {page.audio && (
-                      <div className="mt-3">
+                    {/* Правка реплик: textarea всегда в DOM (скрыт, пока не правим). */}
+                    <div
+                      className={voiced && editingId !== page.id ? "hidden" : "mt-2"}
+                      data-testid={`manga-transcript-wrap-${i + 1}`}
+                    >
+                      <textarea
+                        data-testid={`manga-transcript-${i + 1}`}
+                        aria-label={`Реплики страницы ${i + 1}`}
+                        value={page.transcript ?? ""}
+                        placeholder={"Speaker 1: Ты опоздал\n\nSpeaker 2: Он всегда опаздывал."}
+                        onChange={(e) => setTranscript(page.id, e.target.value)}
+                        rows={4}
+                        className="w-full resize-none rounded-lg border border-border bg-secondary/50 p-2 text-sm text-foreground focus:border-interactive/40 focus:outline-none transition-all"
+                      />
+                    </div>
+
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <button
+                        data-testid={`manga-speak-${i + 1}`}
+                        disabled={isRequesting || plan.problems.length > 0}
+                        onClick={() => {
+                          setEditingId(null);
+                          void speakPage(page.id);
+                        }}
+                        className="flex items-center gap-2 rounded-lg bg-interactive px-3 py-2 text-sm text-interactive-foreground transition-all disabled:opacity-50"
+                      >
+                        {busyWithPage ? <Loader2 className="h-4 w-4 animate-spin" /> : <Volume2 className="h-4 w-4" />}
+                        {voiced ? "Переозвучить кадр" : "Озвучить кадр"}
+                      </button>
+
+                      {voiced && (
+                        <button
+                          data-testid={`manga-edit-${i + 1}`}
+                          onClick={() => setEditingId(editingId === page.id ? null : page.id)}
+                          className="flex items-center gap-1.5 rounded-lg bg-secondary/60 px-3 py-2 text-xs text-muted-foreground transition-all hover:text-foreground"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                          {editingId === page.id ? "Скрыть правку" : "Править реплики"}
+                        </button>
+                      )}
+
+                      {busyWithPage && (
+                        <button
+                          data-testid={`manga-stop-${i + 1}`}
+                          onClick={stop}
+                          aria-label={`Остановить озвучку страницы ${i + 1}`}
+                          className="flex items-center gap-1.5 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive transition-all hover:bg-destructive/20"
+                        >
+                          <Square className="h-3 w-3" fill="currentColor" />
+                          Стоп
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Озвучка кадра — сразу под репликами. */}
+                    {voiced && (
+                      <div className="mt-3 animate-scale-in">
                         <AudioPlayer
-                          src={page.audio}
+                          src={page.audio!}
                           fileName={`manga-page-${i + 1}.wav`}
                           autoPlay={autoPlayKey === `${page.id}:${page.audio}`}
                         />
                       </div>
                     )}
+
+                    {/* Страница поверх диалога и озвучки — главный элемент кадра. */}
+                    {voiced && (
+                      <img
+                        src={page.url}
+                        alt={`Страница манги ${i + 1}`}
+                        className="mt-3 max-h-[28rem] w-full rounded-lg object-contain animate-pop"
+                      />
+                    )}
                   </>
                 )}
+
               </div>
             );
           })}

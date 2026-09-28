@@ -1,13 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   ANALYZE_BATCH_SIZE,
+  ANALYZE_PAYLOAD_BUDGET,
+  ANALYZE_PAYLOAD_OVERHEAD_PER_IMAGE,
   MAX_PAGE_DATA_URL_BYTES,
   MAX_PAGE_FILE_BYTES,
   MAX_PAGE_SIDE_PX,
   computeScaledSize,
+  estimateAnalyzePayloadChars,
   estimateDataURLBytes,
   filterPageFiles,
   formatRejections,
+  planAnalyzeBatches,
+  prepareAnalyzePayload,
   toPageDataURL,
 } from "@/lib/mangaPages";
 import type { DecodedImage } from "@/lib/mangaPages";
@@ -180,5 +185,103 @@ describe("toPageDataURL", () => {
       },
     });
     expect(out.startsWith("data:image/png;base64,")).toBe(true);
+  });
+});
+
+describe("planAnalyzeBatches: тело запроса влезает в сеть", () => {
+  const prepared = (chars: number, id = 0) => ({
+    page: { id },
+    dataUrl: `data:image/jpeg;base64,${"A".repeat(chars)}`,
+    chars: `data:image/jpeg;base64,`.length + chars,
+  });
+
+  it("режет не чаще, чем требует лимит сервера в 5 страниц", () => {
+    const batches = planAnalyzeBatches(Array.from({ length: 5 }, (_, i) => prepared(1000, i)), 1_000_000);
+    expect(batches).toHaveLength(1);
+    expect(batches[0].images).toHaveLength(ANALYZE_BATCH_SIZE);
+    expect(batches[0].pages.map((p) => p.id)).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  it("12 страниц — три батча: 5 + 5 + 2", () => {
+    const batches = planAnalyzeBatches(Array.from({ length: 12 }, (_, i) => prepared(1000, i)), 1_000_000);
+    expect(batches.map((b) => b.pages.length)).toEqual([5, 5, 2]);
+  });
+
+  it("крупные страницы режутся по бюджету, даже если их меньше пяти", () => {
+    const batches = planAnalyzeBatches(Array.from({ length: 4 }, (_, i) => prepared(900_000, i)), 2_000_000);
+    expect(batches.map((b) => b.pages.length)).toEqual([2, 2]);
+    expect(batches.every((b) => b.chars <= 2_000_000)).toBe(true);
+  });
+
+  it("страница больше бюджета всё равно уйдёт отдельным батчем", () => {
+    const batches = planAnalyzeBatches([prepared(5_000_000, 1), prepared(1000, 2)], 1_000_000);
+    expect(batches.map((b) => b.pages.map((p) => p.id))).toEqual([[1], [2]]);
+  });
+
+  it("estimateAnalyzePayloadChars считает то же, что и JSON.stringify тела", () => {
+    const images = ["data:image/jpeg;base64,AAA", "data:image/jpeg;base64,BBBB"];
+    const estimate = estimateAnalyzePayloadChars(images);
+    const actual = JSON.stringify({ images }).length;
+    expect(estimate).toBeGreaterThanOrEqual(actual);
+    expect(estimate - actual).toBeLessThan(images.length * ANALYZE_PAYLOAD_OVERHEAD_PER_IMAGE);
+  });
+
+  it("бюджет по умолчанию держит тело запроса в нескольких мегабайтах", () => {
+    expect(ANALYZE_PAYLOAD_BUDGET).toBeLessThanOrEqual(8_000_000);
+    expect(ANALYZE_PAYLOAD_BUDGET).toBeGreaterThan(MAX_PAGE_DATA_URL_BYTES);
+  });
+});
+
+describe("prepareAnalyzePayload: сжатие под бюджет", () => {
+  const png = (name: string) => file(name, "image/png", 2048);
+
+  it("возвращает страницу на страницу, порядок сохраняется", async () => {
+    const files = [png("a.png"), png("b.png"), png("c.png")];
+    const prepared = await prepareAnalyzePayload(files, {
+      toDataUrl: async (f) => `data:image/png;base64,${f.name.length}${"A".repeat(10)}`,
+    });
+
+    expect(prepared.map((p) => p.page.name)).toEqual(["a.png", "b.png", "c.png"]);
+    expect(prepared.every((p) => p.chars === p.dataUrl.length)).toBe(true);
+  });
+
+  it("если батч не влезает — страницы пережимаются жёстче", async () => {
+    vi.stubGlobal("createImageBitmap", vi.fn(async () => ({ width: 3000, height: 4000, close() {} })));
+    const files = [png("a.png"), png("b.png")];
+
+    const prepared = await prepareAnalyzePayload(files, {
+      budget: 3000,
+      toDataUrl: async () => `data:image/png;base64,${"A".repeat(4000)}`,
+    });
+
+    // dataURL заменены на результат более жёсткого сжатия (в jsdom без canvas
+    // это исходный файл страницы — главное, что путь пройден без падения).
+    expect(prepared).toHaveLength(2);
+    expect(prepared.every((p) => p.dataUrl.startsWith("data:image/"))).toBe(true);
+    expect(prepared.every((p) => p.dataUrl.length < 4000 + 23)).toBe(true);
+  });
+
+  it("когда всё влезает — повторного сжатия нет", async () => {
+    const files = [png("a.png"), png("b.png")];
+    const toDataUrl = vi.fn(async () => "data:image/png;base64,AAAA");
+
+    const prepared = await prepareAnalyzePayload(files, { budget: 1_000_000, toDataUrl });
+
+    expect(toDataUrl).toHaveBeenCalledTimes(2);
+    expect(prepared.every((p) => p.dataUrl === "data:image/png;base64,AAAA")).toBe(true);
+  });
+
+  it("батчи из подготовленных страниц всегда проходят по бюджету и лимиту сервера", async () => {
+    const files = Array.from({ length: 9 }, (_, i) => png(`p${i + 1}.png`));
+    const prepared = await prepareAnalyzePayload(files, {
+      budget: 5000,
+      toDataUrl: async () => `data:image/png;base64,${"A".repeat(2000)}`,
+    });
+
+    const batches = planAnalyzeBatches(prepared, 5000);
+    expect(batches.length).toBeGreaterThan(1);
+    expect(batches.every((b) => b.pages.length <= ANALYZE_BATCH_SIZE)).toBe(true);
+    expect(batches.every((b) => b.chars <= 5000 || b.pages.length === 1)).toBe(true);
+    expect(batches.flatMap((b) => b.images)).toHaveLength(9);
   });
 });

@@ -1,9 +1,11 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import { edgeJson, edgeRequest, isAbortError } from "@/lib/edgeAuth";
 import { useAuth } from "@/hooks/useAuth";
 import { useSounds } from "@/hooks/useSounds";
 import { AI_PROVIDERS, type AiProvider } from "@/types/ai-provider";
+import { syncActiveKeyFromHeaders } from "@/lib/aiKeySync";
 import { useAiProvider } from "@/hooks/useAiProvider";
 import { useUserApiKeys } from "@/hooks/useUserApiKeys";
 
@@ -26,9 +28,8 @@ export interface Chat {
   updatedAt: Date;
 }
 
-const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat`;
-const IMAGE_SEARCH_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/image-search`;
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+const CHAT_FN = "chat";
+const IMAGE_SEARCH_FN = "image-search";
 
 // Resolves [IMAGE_SEARCH: query] tags → markdown images
 async function resolveImageSearchTags(text: string): Promise<string> {
@@ -41,15 +42,8 @@ async function resolveImageSearchTags(text: string): Promise<string> {
     matches.map(async (match) => {
       const query = match[1].trim();
       try {
-        const { getEdgeAuthHeaders } = await import("@/lib/edgeAuth");
-        const resp = await fetch(IMAGE_SEARCH_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...(await getEdgeAuthHeaders()) },
-          body: JSON.stringify({ query }),
-        });
-        if (!resp.ok) return { match: match[0], replacement: "" };
-        const data = await resp.json();
-        const imgs: { url: string; title: string }[] = data.results || [];
+        const data = await edgeJson<{ results?: { url: string; title: string }[] }>(IMAGE_SEARCH_FN, { query });
+        const imgs = data.results || [];
         if (imgs.length === 0) return { match: match[0], replacement: "" };
         const mdImages = imgs.slice(0, 3).map(img => `![${img.title || query}](${img.url})`).join("\n");
         return { match: match[0], replacement: `\n${mdImages}\n` };
@@ -318,44 +312,36 @@ export function useChat() {
       );
 
       try {
-        const { data: { session } } = await supabase.auth.getSession();
-        const accessToken = session?.access_token ?? import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-        const resp = await fetch(CHAT_URL, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${accessToken}`,
-            apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+        // Тот же путь, что и у остальных запросов фич (см. src/lib/edgeAuth.ts):
+        // заголовки Authorization + apikey, signal от AbortController, ошибка
+        // сервера читается из { error } и уходит в toast. Провайдер и ключи
+        // пользователя едут в теле — их ждёт сервер (functions/chat).
+        const resp = await edgeRequest(CHAT_FN, {
+          body: {
+            messages: apiMessages,
+            model: selectedModel,
+            thinking: thinkingEnabled,
+            provider: aiProvider,
+            userKeys: userGeminiKeys,
+            userKeyIndex: activeKeyIndex,
           },
-          body: JSON.stringify({ messages: apiMessages, model: selectedModel, thinking: thinkingEnabled, provider: aiProvider, userKeys: userGeminiKeys, userKeyIndex: activeKeyIndex }),
           signal: controller.signal,
         });
 
         // Сервер сообщает, какой провайдер реально обработал запрос
         // (x-ai-provider). Если это запасной — предупреждаем пользователя.
         const actualProvider = resp.headers.get("x-ai-provider");
-        if (resp.ok && actualProvider && actualProvider !== aiProvider && (actualProvider === "lovable" || actualProvider === "gemini")) {
+        if (actualProvider && actualProvider !== aiProvider && (actualProvider === "lovable" || actualProvider === "gemini")) {
           toast.info(`Отвечаю через ${AI_PROVIDERS[actualProvider as AiProvider].label} — выбранный провайдер недоступен`);
         }
 
-        // При прямом Gemini сервер сообщает, какой ключ сработал:
-        // запоминаем его активным, чтобы следующий запрос начинался с него.
-        if (resp.ok && actualProvider === "gemini") {
-          const keySource = resp.headers.get("x-ai-key-source");
-          const keyIndexRaw = resp.headers.get("x-ai-key-index");
-          const keyIndex = keyIndexRaw == null ? NaN : Number.parseInt(keyIndexRaw, 10);
-          if (keySource === "user" && Number.isInteger(keyIndex) && keyIndex >= 0) {
-            setActiveKeyIndex(keyIndex);
-          } else if (keySource === "server" && userGeminiKeys.length > 0) {
+        // При прямом Gemini сервер сообщает, какой ключ сработал: запоминаем его
+        // активным, чтобы следующий запрос начинался с него (ротация квоты).
+        if (actualProvider === "gemini") {
+          const { source } = syncActiveKeyFromHeaders(resp.headers, setActiveKeyIndex);
+          if (source === "server" && userGeminiKeys.length > 0) {
             toast.info("Квота ваших ключей исчерпана — отвечаю через серверный ключ");
           }
-        }
-
-        if (!resp.ok) {
-          const errData = await resp.json().catch(() => ({}));
-          toast.error(errData.error || `Ошибка: ${resp.status}`);
-          setIsStreaming(false);
-          return;
         }
 
         if (!resp.body) {
@@ -489,11 +475,13 @@ export function useChat() {
           supabase.from("chats").update({ updated_at: new Date().toISOString() }).eq("id", chatId),
         ]);
       } catch (e: unknown) {
-        if (e instanceof DOMException && e.name === "AbortError") {
-          // User stopped
+        if (isAbortError(e, controller.signal)) {
+          // Пользователь нажал «Стоп» — это не ошибка
         } else {
           console.error("Stream error:", e);
-          toast.error("Ошибка при получении ответа");
+          // EdgeRequestError несёт текст сервера ({ error } или код ответа) —
+          // показываем его, а не общую формулировку.
+          toast.error(e instanceof Error && e.message ? e.message : "Ошибка при получении ответа");
         }
       }
 

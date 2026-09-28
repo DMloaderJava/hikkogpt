@@ -2,11 +2,19 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
+  DEFAULT_MANGA_MODEL,
   INVALID_IMAGES_ERROR,
+  MANGA_MODEL_MAP,
   MAX_IMAGES,
   MAX_IMAGE_DATA_URL_CHARS,
+  dataUrlToInlineData,
   extractJson,
+  geminiAnalyzeBody,
+  geminiText,
   normalizePages,
+  shouldSwitchApi,
+  toAiModel,
+  toGoogleModel,
   upstreamErrorMessage,
   validateImages,
 } from "../../supabase/functions/manga-analyze/parse";
@@ -119,6 +127,130 @@ describe("upstreamErrorMessage", () => {
     expect(upstreamErrorMessage(402)).toMatch(/Недостаточно средств/);
     expect(upstreamErrorMessage(500)).toMatch(/временно недоступен/);
     expect(upstreamErrorMessage(418)).toContain("418");
+  });
+});
+
+describe("смена api: имя из переключателя → модель", () => {
+  const pngUrl = png(200);
+
+  it("каждое имя переключателя даёт свою модель шлюза", () => {
+    expect(toAiModel("HikkoGPT")).toBe("google/gemini-3.1-pro-preview");
+    expect(toAiModel("HikkoGPT Smart")).toBe("google/gemini-3-flash-preview");
+    expect(toAiModel("HikkoGPT Turbo")).toBe("google/gemini-3-flash-preview");
+    expect(toAiModel("Спорящий")).toBe("google/gemini-3.1-flash-lite-preview");
+    expect(new Set(Object.values(MANGA_MODEL_MAP)).size).toBeGreaterThan(1);
+  });
+
+  it("старый клиент без поля model и чужое имя получают модель по умолчанию", () => {
+    expect(toAiModel(undefined)).toBe(DEFAULT_MANGA_MODEL);
+    expect(toAiModel(null)).toBe(DEFAULT_MANGA_MODEL);
+    expect(toAiModel("")).toBe(DEFAULT_MANGA_MODEL);
+    expect(toAiModel("gpt-5")).toBe(DEFAULT_MANGA_MODEL);
+    expect(toAiModel({ model: "HikkoGPT" })).toBe(DEFAULT_MANGA_MODEL);
+    expect(toAiModel("Илон Маск")).toBe(DEFAULT_MANGA_MODEL);
+  });
+
+  it("запасной api: модель шлюза → прямой Gemini, все варианты зрячие", () => {
+    expect(toGoogleModel("google/gemini-3.1-pro-preview")).toBe("gemini-2.0-flash-exp");
+    expect(toGoogleModel("google/gemini-3-flash-preview")).toBe("gemini-2.0-flash");
+    expect(toGoogleModel("google/gemini-3.1-flash-lite-preview")).toBe("gemini-2.0-flash");
+    expect(toGoogleModel("google/gemini-2.5-pro")).toBe("gemini-1.5-pro");
+    expect(toGoogleModel("")).toBe("gemini-2.0-flash");
+    // Анализ манги без изображений не работает — текстовых моделей в списке нет.
+    for (const aiModel of Object.values(MANGA_MODEL_MAP)) {
+      expect(toGoogleModel(aiModel)).toMatch(/^gemini-/);
+    }
+  });
+
+  it("api меняется только при лимите, оплате или сбое сервиса", () => {
+    expect(shouldSwitchApi(429)).toBe(true);
+    expect(shouldSwitchApi(402)).toBe(true);
+    expect(shouldSwitchApi(500)).toBe(true);
+    expect(shouldSwitchApi(503)).toBe(true);
+    // 400/401 — ошибка запроса или ключа: второй провайдер её не починит.
+    expect(shouldSwitchApi(400)).toBe(false);
+    expect(shouldSwitchApi(401)).toBe(false);
+    expect(shouldSwitchApi(413)).toBe(false);
+    expect(shouldSwitchApi(200)).toBe(false);
+  });
+});
+
+describe("смена api: тело запроса к прямому Gemini", () => {
+  const page = (n: number) => `data:image/jpeg;base64,${"A".repeat(64 + n)}`;
+
+  it("dataURL страницы превращается в inline_data с mime", () => {
+    expect(dataUrlToInlineData(page(1))).toEqual({ mime_type: "image/jpeg", data: "A".repeat(65) });
+    expect(dataUrlToInlineData("data:image/png;base64,QQ==")?.mime_type).toBe("image/png");
+    expect(dataUrlToInlineData("data:image/webp;base64,QQ")).not.toBeNull();
+    expect(dataUrlToInlineData("https://example.com/page.png")).toBeNull();
+    expect(dataUrlToInlineData("data:image/gif;base64,QQ")).toBeNull();
+    expect(dataUrlToInlineData("")).toBeNull();
+  });
+
+  it("промпт тот же, страницы идут картинками, а не текстом", () => {
+    const body = geminiAnalyzeBody("SYSTEM", [page(1), page(2)], 2);
+    expect(body?.systemInstruction.parts[0].text).toBe("SYSTEM");
+    expect(body?.contents).toHaveLength(1);
+    expect(body?.contents[0].role).toBe("user");
+
+    const parts = body?.contents[0].parts as { text?: string; inline_data?: unknown }[];
+    expect(parts).toHaveLength(3); // задание + 2 страницы
+    expect(parts[0].text).toContain("2 страниц");
+    expect(parts[1].inline_data).not.toBeUndefined();
+    expect(parts[2].inline_data).not.toBeUndefined();
+    // Ключ именно inline_data: в `inlineData` прямой api картинку не увидит.
+    expect(JSON.stringify(body)).toContain("inline_data");
+    expect(JSON.stringify(body)).not.toContain("image_url");
+  });
+
+  it("непереводимая страница отменяет запасной api, а не шлёт половину", () => {
+    expect(geminiAnalyzeBody("SYSTEM", [page(1), "https://cdn/page.png"], 2)).toBeNull();
+    expect(geminiAnalyzeBody("SYSTEM", [], 0)?.contents[0].parts).toHaveLength(1);
+  });
+
+  it("текст ответа Gemini достаётся из candidates, пустой ответ — пустая строка", () => {
+    const result = { candidates: [{ content: { parts: [{ text: '{"pages":' }, { text: "[]}" }] } }] };
+    expect(geminiText(result)).toBe('{"pages":[]}');
+    expect(geminiText({ candidates: [{ content: { parts: [{ text: 42 }] } }] })).toBe("");
+    expect(geminiText({ candidates: [] })).toBe("");
+    expect(geminiText({})).toBe("");
+    expect(geminiText(null)).toBe("");
+  });
+
+  it("разбор запасного api проходит тот же путь, что и основной", () => {
+    const raw = geminiText({
+      candidates: [
+        { content: { parts: [{ text: '{"pages":[{"description":"Кадр 1","transcript":"Speaker 1: Привет."}]}' }] } },
+      ],
+    });
+    const pages = normalizePages(extractJson(raw), 1);
+    expect(pages).toEqual([{ description: "Кадр 1", transcript: "Speaker 1: Привет." }]);
+  });
+});
+
+describe("system prompt: формат ответа модели", () => {
+  it("требует только JSON с description и transcript", () => {
+    expect(indexSource).toContain('{"pages":[{"description":"...","transcript":"..."}]}');
+    expect(indexSource).toContain("Ровно один элемент pages на каждое изображение");
+  });
+
+  it("показывает формат на конкретном примере, а не на «Speaker N»", () => {
+    expect(indexSource).toContain("Speaker 1: Ребята, начинаем?");
+    expect(indexSource).toContain("Speaker 2: Я сказала тебе прекратить!");
+    expect(indexSource).toContain("Speaker 3: Ладно, ладно, понял.");
+    expect(indexSource).toContain("Speaker 4: Вы оба довольно забавные.");
+    expect(indexSource).toContain("номер — реальная цифра, не буква N");
+  });
+
+  it("запрещает лишний текст в репликах", () => {
+    expect(indexSource).toContain("между репликами одна пустая строка");
+    expect(indexSource).toContain("никаких описаний, комментариев");
+    expect(indexSource).toContain("в transcript его текст попадать не должен");
+    expect(indexSource).toContain("максимум 8 персонажей");
+  });
+
+  it("description остаётся в JSON — он держит номера персонажей между страницами", () => {
+    expect(indexSource).toContain("номера одного и того же персонажа одинаковы на всех страницах");
   });
 });
 
