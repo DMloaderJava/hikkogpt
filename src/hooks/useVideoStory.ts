@@ -25,6 +25,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { edgeBlob, isAbortError } from "@/lib/edgeAuth";
+import { useAiProvider } from "@/hooks/useAiProvider";
+import { useUserApiKeys } from "@/hooks/useUserApiKeys";
+import { syncActiveKeyFromHeaders } from "@/lib/aiKeySync";
 import {
   classifyEdgeFailure,
   classifyPrepareFailure,
@@ -175,6 +178,35 @@ export function useVideoStory({ onShare, deps = browserDeps, title }: UseVideoSt
   tracksRef.current = tracks;
   const framesRef = useRef(frames);
   framesRef.current = frames;
+
+  /**
+   * Провайдер (Lovable AI / Gemini API) и ключи пользователя — общие настройки
+   * приложения: озвучка слайдов уходит тем же `dialog-tts`, что и в чате,
+   * поэтому поля провайдера и ротация активного ключа работают так же.
+   */
+  const { provider } = useAiProvider();
+  const { keys: userKeys, activeIndex: userKeyIndex, setActiveIndex } = useUserApiKeys();
+  const providerRef = useRef(provider);
+  providerRef.current = provider;
+  const userKeysRef = useRef(userKeys);
+  userKeysRef.current = userKeys;
+  const userKeyIndexRef = useRef(userKeyIndex);
+  userKeyIndexRef.current = userKeyIndex;
+
+  const aiRequestFields = useCallback(
+    () => ({
+      provider: providerRef.current,
+      userKeys: userKeysRef.current,
+      userKeyIndex: userKeyIndexRef.current,
+    }),
+    []
+  );
+  const onResponse = useCallback(
+    (res: Response) => {
+      syncActiveKeyFromHeaders(res.headers, setActiveIndex);
+    },
+    [setActiveIndex]
+  );
 
   const runIdRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
@@ -531,7 +563,7 @@ export function useVideoStory({ onShare, deps = browserDeps, title }: UseVideoSt
       const body = buildTtsRequest(item.text, character);
       let blob: Blob;
       try {
-        blob = await edgeBlob(DIALOG_TTS_FN, body, signal);
+        blob = await edgeBlob(DIALOG_TTS_FN, { ...body, ...aiRequestFields() }, signal, { onResponse });
       } catch (e) {
         if (isAbortError(e, signal)) throw e;
         throw classifyEdgeFailure(e, "tts-api", "сервер не вернул аудио слайда");
@@ -554,7 +586,7 @@ export function useVideoStory({ onShare, deps = browserDeps, title }: UseVideoSt
         return { url, seconds: 0, decoded: false };
       }
     },
-    [deps]
+    [aiRequestFields, deps, onResponse]
   );
 
   /**

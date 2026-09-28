@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Menu, Brain, X, SquarePen, Settings, ChevronDown } from "lucide-react";
+import { Menu, Brain, X, SquarePen, Settings, ChevronDown, Heart, Sparkles } from "lucide-react";
 import { toast } from "@/components/ui/sonner";
 import { ChatSidebar } from "@/components/ChatSidebar";
 import { ChatInput } from "@/components/ChatInput";
@@ -7,6 +7,8 @@ import { VoiceModeOverlay } from "@/components/VoiceModeOverlay";
 import { MessageBubble } from "@/components/MessageBubble";
 import { EmptyState } from "@/components/EmptyState";
 import { ModelSelector } from "@/components/ModelSelector";
+import { ProviderSelector } from "@/components/ProviderSelector";
+import { AI_PROVIDERS, type AiProvider } from "@/types/ai-provider";
 import { DeepSearchPanel } from "@/components/DeepSearchPanel";
 import { SettingsPanel } from "@/components/SettingsPanel";
 import { useChat } from "@/hooks/useChat";
@@ -22,6 +24,8 @@ const Index = () => {
   const {
     chats, activeChat, activeChatId, isStreaming,
     selectedModel, thinkingEnabled, soundsEnabled, toggleSounds,
+    aiProvider, setAiProvider,
+    userGeminiKeys, activeKeyIndex, addUserKeys, removeUserKey, clearUserKeys,
     setThinkingEnabled, setSelectedModel, setActiveChatId,
     createNewChat, deleteChat, renameChat, sendMessage, stopStreaming,
   } = useChat();
@@ -125,6 +129,16 @@ const Index = () => {
     setSelectedModel(model);
     if (characters.includes(model)) setActiveChatId(null);
   }, [setSelectedModel, setActiveChatId]);
+
+  const handleProviderChange = useCallback((provider: AiProvider) => {
+    setAiProvider(provider);
+    toast.success(`Провайдер: ${AI_PROVIDERS[provider].label} — ${AI_PROVIDERS[provider].description}`);
+  }, [setAiProvider]);
+
+  // На мобильном в шапке нет места под две кнопки — одна кнопка переключает по кругу.
+  const toggleProvider = useCallback(() => {
+    handleProviderChange(aiProvider === "lovable" ? "gemini" : "lovable");
+  }, [aiProvider, handleProviderChange]);
 
   const handleSuggestionClick = (text: string) => sendMessage(text);
 
@@ -236,6 +250,7 @@ const Index = () => {
               </div>
             </div>
             <div className="flex items-center gap-0.5 flex-shrink-0">
+              <ProviderSelector value={aiProvider} onChange={handleProviderChange} variant="compact" />
               <button
                 onClick={() => setThinkingEnabled(!thinkingEnabled)}
                 className={`rounded-lg p-2 transition-all ${thinkingEnabled ? "bg-interactive/15 text-interactive" : "btn-interactive text-muted-foreground"}`}
@@ -272,6 +287,13 @@ const Index = () => {
             </div>
 
             <div className="flex items-center gap-0.5 pointer-events-auto">
+              <button
+                onClick={toggleProvider}
+                className="btn-interactive rounded-xl p-2.5 text-muted-foreground transition-all"
+                title={`Провайдер: ${AI_PROVIDERS[aiProvider].label}. Нажмите, чтобы переключить`}
+              >
+                {aiProvider === "gemini" ? <Sparkles className="h-5 w-5" /> : <Heart className="h-5 w-5" />}
+              </button>
               <button
                 onClick={() => setThinkingEnabled(!thinkingEnabled)}
                 className={`rounded-xl p-2.5 transition-all active:scale-90 ${thinkingEnabled ? "bg-interactive/15 text-interactive" : "btn-interactive text-muted-foreground"}`}
@@ -380,6 +402,13 @@ const Index = () => {
         userEmail={user?.email}
         soundsEnabled={soundsEnabled}
         onToggleSounds={toggleSounds}
+        aiProvider={aiProvider}
+        onProviderChange={handleProviderChange}
+        userKeys={userGeminiKeys}
+        activeKeyIndex={activeKeyIndex}
+        onAddUserKeys={addUserKeys}
+        onRemoveUserKey={removeUserKey}
+        onClearUserKeys={clearUserKeys}
       />
     </div>
   );

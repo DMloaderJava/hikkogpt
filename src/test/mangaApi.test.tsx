@@ -26,6 +26,8 @@ import { MANGA_MODEL_MAP, toAiModel } from "../../supabase/functions/manga-analy
 const parseSource = readFileSync(resolve(process.cwd(), "supabase/functions/manga-analyze/parse.ts"), "utf8");
 const indexSource = readFileSync(resolve(process.cwd(), "supabase/functions/manga-analyze/index.ts"), "utf8");
 const hookSource = readFileSync(resolve(process.cwd(), "src/hooks/useMangaVoice.ts"), "utf8");
+/** Общий модуль запасного бэкенда (прямой Google Gemini) — один на все функции. */
+const sharedSource = readFileSync(resolve(process.cwd(), "supabase/functions/_shared/gemini.ts"), "utf8");
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -193,29 +195,34 @@ describe("MangaApiSelector", () => {
 
 describe("стражи: api доходит до сервера", () => {
   it("хук кладёт имя api в тело manga-analyze", () => {
-    expect(hookSource).toContain("{ images: batch.images, model }");
+    expect(hookSource).toContain("{ images: batch.images, model, ...aiRequestFields() }");
     expect(hookSource).toContain("loadMangaApi(preferredApi)");
     expect(hookSource).toContain("saveMangaApi(id)");
   });
 
   it("сервер мапит имя и не хардкодит модель", () => {
-    expect(indexSource).toContain("const { images, model } = await req.json()");
+    expect(indexSource).toContain("const { images, model, provider, userKeys, userKeyIndex } = await req.json()");
     expect(indexSource).toContain("const aiModel = toAiModel(model)");
     expect(indexSource).toContain("model: aiModel");
     expect(indexSource).not.toContain("model: 'google/gemini-3-flash-preview'");
   });
 
   it("при лимите или сбое основного api функция меняет его на запасной", () => {
-    expect(indexSource).toContain("shouldSwitchApi(response.status)");
-    expect(indexSource).toContain("tryGeminiAnalyze(SYSTEM_PROMPT, validated.images, aiModel)");
-    expect(indexSource).toContain("GEMINI_API_KEYS");
-    expect(indexSource).toContain("generativelanguage.googleapis.com");
-    // Запасной api получает тот же промпт: формат реплик не зависит от выбора api.
+    // Запасной путь общий для всех функций (_shared/gemini.ts): сначала выбранный
+    // провайдер, затем второй бэкенд с перебором ключей пользователя и сервера.
+    expect(indexSource).toContain("const order: Backend[] = [requestedProvider");
+    expect(indexSource).toContain("geminiGenerate(attempts, geminiModels, geminiBody");
+    expect(indexSource).toContain("parseServerKeys(Deno.env.get('GEMINI_API_KEYS'))");
+    expect(sharedSource).toContain("generativelanguage.googleapis.com");
+    // Выбранное клиентом api определяет модель и у прямого Gemini.
+    expect(indexSource).toContain("toGoogleModel(aiModel)");
+    // Оба бэкенда получают один промпт: формат реплик не зависит от выбора api.
     expect(indexSource).toContain("const SYSTEM_PROMPT = [");
     expect(indexSource).toContain("{ role: 'system', content: SYSTEM_PROMPT }");
-    expect(indexSource).toContain("geminiAnalyzeBody(systemPrompt, images, images.length)");
+    expect(indexSource).toContain("systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] }");
     // Маппинг живёт в parse.ts — чистой части функции, которую покрывают тесты.
     expect(parseSource).toContain("export const MANGA_MODEL_MAP");
     expect(parseSource).toContain("export function toAiModel");
+    expect(parseSource).toContain("export function toGoogleModel");
   });
 });

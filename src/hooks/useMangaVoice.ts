@@ -34,6 +34,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { EdgeRequestError, edgeBlob, edgeJson, isAbortError } from "@/lib/edgeAuth";
+import { useAiProvider } from "@/hooks/useAiProvider";
+import { useUserApiKeys } from "@/hooks/useUserApiKeys";
+import { syncActiveKeyFromHeaders } from "@/lib/aiKeySync";
 import {
   classifyEdgeFailure,
   classifyPrepareFailure,
@@ -193,6 +196,13 @@ export function useMangaVoice({ preferredApi }: UseMangaVoiceOptions = {}) {
    * а конкретную модель выбирает сервер — как в `chat`.
    */
   const [apiModel, setApiModelState] = useState<string>(() => loadMangaApi(preferredApi));
+  /**
+   * Провайдер (Lovable AI / Gemini API) и ключи пользователя — общие настройки
+   * приложения: они уходят в тело каждого запроса манги так же, как в чате и
+   * озвучке диалога, а сервер отвечает заголовком, какой ключ сработал.
+   */
+  const { provider } = useAiProvider();
+  const { keys: userKeys, activeIndex: userKeyIndex, setActiveIndex } = useUserApiKeys();
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analyzeProgress, setAnalyzeProgress] = useState<AnalyzeProgress | null>(null);
   /** id страницы, которая озвучивается прямо сейчас. */
@@ -220,6 +230,31 @@ export function useMangaVoice({ preferredApi }: UseMangaVoiceOptions = {}) {
   /** Свежее api внутри цикла батчей — переключение во время запроса его не рвёт. */
   const apiModelRef = useRef(apiModel);
   apiModelRef.current = apiModel;
+  const providerRef = useRef(provider);
+  providerRef.current = provider;
+  const userKeysRef = useRef(userKeys);
+  userKeysRef.current = userKeys;
+  const userKeyIndexRef = useRef(userKeyIndex);
+  userKeyIndexRef.current = userKeyIndex;
+
+  /**
+   * Поля провайдера для тела запроса + синхронизация активного ключа по
+   * заголовкам ответа (ротация при исчерпании квоты — как в `useChat`).
+   */
+  const aiRequestFields = useCallback(
+    () => ({
+      provider: providerRef.current,
+      userKeys: userKeysRef.current,
+      userKeyIndex: userKeyIndexRef.current,
+    }),
+    []
+  );
+  const onResponse = useCallback(
+    (res: Response) => {
+      syncActiveKeyFromHeaders(res.headers, setActiveIndex);
+    },
+    [setActiveIndex]
+  );
 
   /**
    * Выбор api пользователем: неизвестное имя на сервер не уходит, а валидное
@@ -421,8 +456,9 @@ export function useMangaVoice({ preferredApi }: UseMangaVoiceOptions = {}) {
           // сменить её при лимите (`toAiModel` + `shouldSwitchApi`).
           const data = await edgeJson<{ pages?: AnalyzePageResult[] }>(
             MANGA_ANALYZE_FN,
-            { images: batch.images, model },
-            controller.signal
+            { images: batch.images, model, ...aiRequestFields() },
+            controller.signal,
+            { onResponse }
           );
           const result: AnalyzePageResult[] = Array.isArray(data?.pages) ? data.pages : [];
 
@@ -489,7 +525,12 @@ export function useMangaVoice({ preferredApi }: UseMangaVoiceOptions = {}) {
     let blob: Blob;
     try {
       // Этап 4 — запрос к api озвучки: нормализованный диалог + карта голосов.
-      blob = await edgeBlob(DIALOG_TTS_FN, { transcript: plan.text, voices: voicesRef.current }, signal);
+      blob = await edgeBlob(
+        DIALOG_TTS_FN,
+        { transcript: plan.text, voices: voicesRef.current, ...aiRequestFields() },
+        signal,
+        { onResponse }
+      );
     } catch (e) {
       if (isAbortError(e, signal)) throw e;
       // Сервер ответил, но вместо аудио пришёл мусор — это этап обработки аудио.

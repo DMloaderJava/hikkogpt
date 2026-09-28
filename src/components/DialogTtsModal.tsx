@@ -1,6 +1,9 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { X, Loader2, Volume2, Plus, Minus } from "lucide-react";
 import { getEdgeAuthHeaders } from "@/lib/edgeAuth";
+import { useAiProvider } from "@/hooks/useAiProvider";
+import { useUserApiKeys } from "@/hooks/useUserApiKeys";
+import { syncActiveKeyFromHeaders } from "@/lib/aiKeySync";
 import { AudioPlayer } from "@/components/AudioPlayer";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
@@ -35,6 +38,9 @@ export function DialogTtsModal({ open, onClose }: DialogTtsModalProps) {
   const [error, setError] = useState<string | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const urlRef = useRef<string | null>(null);
+  // Озвучка идёт через выбранный в настройках провайдер.
+  const { provider } = useAiProvider();
+  const { keys: userKeys, activeIndex: userKeyIndex, setActiveIndex } = useUserApiKeys();
 
   useEffect(() => {
     return () => {
@@ -69,7 +75,7 @@ export function DialogTtsModal({ open, onClose }: DialogTtsModalProps) {
       const res = await fetch(`${SUPABASE_URL}/functions/v1/dialog-tts`, {
         method: "POST",
         headers: { ...(await getEdgeAuthHeaders()), "Content-Type": "application/json" },
-        body: JSON.stringify({ transcript: text, voices }),
+        body: JSON.stringify({ transcript: text, voices, provider, userKeys, userKeyIndex }),
       });
       if (!res.ok) {
         let msg = "Не удалось озвучить диалог.";
@@ -79,6 +85,7 @@ export function DialogTtsModal({ open, onClose }: DialogTtsModalProps) {
         } catch { /* ignore */ }
         throw new Error(msg);
       }
+      syncActiveKeyFromHeaders(res.headers, setActiveIndex);
       const blob = await res.blob();
       if (urlRef.current) URL.revokeObjectURL(urlRef.current);
       const url = URL.createObjectURL(blob);

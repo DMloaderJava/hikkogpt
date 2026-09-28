@@ -159,6 +159,12 @@ export interface EdgeRequestOptions {
   signal?: AbortSignal;
   /** Таймаут запроса; `0` отключает его (для стримов без ограничения). */
   timeoutMs?: number;
+  /**
+   * Вызывается на успешный ответ до чтения тела — так фичи видят служебные
+   * заголовки (`x-ai-provider`, `x-ai-key-source`, `x-ai-key-index`), которые
+   * `edgeJson`/`edgeBlob` иначе спрятали бы вместе с `Response`.
+   */
+  onResponse?: (res: Response) => void;
 }
 
 /** Внутренние ручки для тестов: пауза повтора и часы таймаута. */
@@ -255,6 +261,7 @@ export async function edgeRequest(fn: string, options: EdgeInternals = {}): Prom
       linked.release();
       throw await describeFailure(res, fn);
     }
+    options.onResponse?.(res);
     return res;
   }
 

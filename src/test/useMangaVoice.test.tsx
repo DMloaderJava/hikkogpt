@@ -764,7 +764,7 @@ describe("useMangaVoice: смена api анализа", () => {
 
   it("страж: api уходит полем model, а не хардкодом в теле запроса", () => {
     expect(hookSource).toContain("const model = apiModelRef.current");
-    expect(hookSource).toContain("{ images: batch.images, model }");
+    expect(hookSource).toContain("{ images: batch.images, model, ...aiRequestFields() }");
     // Модель берётся один раз на запуск — батчи не разъезжаются по разным api.
     expect(hookSource).not.toMatch(/images: batch\.images\s*\}/);
   });

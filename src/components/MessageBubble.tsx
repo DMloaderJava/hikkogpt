@@ -3,6 +3,9 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import type { Message } from "@/hooks/useChat";
 import { STOP_SPEECH_EVENT } from "@/lib/speechEvents";
 import { getEdgeAuthHeaders } from "@/lib/edgeAuth";
+import { useAiProvider } from "@/hooks/useAiProvider";
+import { useUserApiKeys } from "@/hooks/useUserApiKeys";
+import { syncActiveKeyFromHeaders } from "@/lib/aiKeySync";
 import { CodeBlock } from "@/components/CodeBlock";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
@@ -13,6 +16,9 @@ function useTTS() {
   const [state, setState] = useState<VoiceState>("idle");
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const stateRef = useRef<VoiceState>("idle");
+  // Озвучка идёт через выбранный в настройках провайдер.
+  const { provider } = useAiProvider();
+  const { keys: userKeys, activeIndex: userKeyIndex, setActiveIndex } = useUserApiKeys();
 
   const setS = (s: VoiceState) => { stateRef.current = s; setState(s); };
 
@@ -43,7 +49,7 @@ function useTTS() {
       const resp = await fetch(`${SUPABASE_URL}/functions/v1/dialog-tts`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(await getEdgeAuthHeaders()) },
-        body: JSON.stringify({ transcript: /^Speaker\s*\d+\s*:/im.test(clean) ? clean : `Speaker 1: ${clean}`, voices: { "1": voice } }),
+        body: JSON.stringify({ transcript: /^Speaker\s*\d+\s*:/im.test(clean) ? clean : `Speaker 1: ${clean}`, voices: { "1": voice }, provider, userKeys, userKeyIndex }),
       });
 
       if (!resp.ok) {
@@ -52,6 +58,8 @@ function useTTS() {
         setS("idle");
         return;
       }
+
+      syncActiveKeyFromHeaders(resp.headers, setActiveIndex);
 
       const blob = await resp.blob();
       const url = URL.createObjectURL(blob);
@@ -67,7 +75,7 @@ function useTTS() {
       console.error("TTS fetch error:", e);
       setS("idle");
     }
-  }, []);
+  }, [provider, userKeys, userKeyIndex, setActiveIndex]);
 
   const stop = useCallback(() => {
     if (audioRef.current) {

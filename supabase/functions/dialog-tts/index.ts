@@ -1,13 +1,31 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+import {
+  buildAttempts,
+  extractTtsPcm,
+  geminiGenerate,
+  parseProvider,
+  parseServerKeys,
+  providerResponseHeaders,
+  resolveClientKeys,
+  resolveStartIndex,
+  type AiProvider,
+  type KeyAttempt,
+  type KeySource,
+} from "../_shared/gemini.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
+  'Access-Control-Expose-Headers': 'x-ai-provider, x-ai-key-source, x-ai-key-index',
 };
 
 const ALLOWED_VOICES = ['Charon', 'Kore', 'Puck', 'Aoede', 'Fenrir', 'Leda', 'Zephyr', 'Orus'];
 const MAX_SPEAKERS = 8;
+const LOVABLE_TTS_MODEL = 'google/gemini-3.1-flash-tts-preview';
+const GEMINI_TTS_MODELS = [
+  ...new Set([Deno.env.get("GEMINI_TTS_MODEL") || "gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts"]),
+];
 
 interface Line { speaker: string; text: string }
 
@@ -76,6 +94,85 @@ function silence(ms: number, sampleRate: number, channels: number, bits: number)
   return new Uint8Array(frames * channels * (bits / 8));
 }
 
+// --- Backends ---
+
+type Backend = "lovable" | "gemini";
+
+class UpstreamError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+interface SynthResult {
+  pcm: Uint8Array;
+  sampleRate: number;
+  channels: number;
+  bits: number;
+  backend: Backend;
+  source: KeySource;
+  userIndex: number;
+}
+
+/** Пейлоад в нативном формате Gemini TTS (Lovable gateway принимает его как есть + model). */
+function ttsPayload(text: string, speechConfig: Record<string, unknown>) {
+  return {
+    contents: [{ role: 'user', parts: [{ text }] }],
+    generationConfig: {
+      temperature: 1,
+      responseModalities: ['AUDIO'],
+      speechConfig,
+    },
+  };
+}
+
+async function synthLovable(
+  payload: ReturnType<typeof ttsPayload>,
+  apiKey: string,
+): Promise<Omit<SynthResult, "backend" | "source" | "userIndex">> {
+  const response = await fetch('https://ai.gateway.lovable.dev/v1/audio/speech', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ model: LOVABLE_TTS_MODEL, ...payload }),
+  });
+  if (!response.ok) {
+    const errText = await response.text().catch(() => '');
+    console.error(`dialog-tts lovable failed [${response.status}]:`, errText.slice(0, 200));
+    throw new UpstreamError(response.status, errText.slice(0, 200) || `Lovable TTS error ${response.status}`);
+  }
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  const info = findDataChunk(bytes);
+  return {
+    pcm: bytes.slice(info.offset, info.offset + info.length),
+    sampleRate: info.sampleRate,
+    channels: info.channels,
+    bits: info.bits,
+  };
+}
+
+async function synthGemini(
+  payload: ReturnType<typeof ttsPayload>,
+  attempts: KeyAttempt[],
+): Promise<Omit<SynthResult, "backend">> {
+  const res = await geminiGenerate(attempts, GEMINI_TTS_MODELS, payload, { label: "dialog-tts" });
+  if (!res.ok) throw new UpstreamError(res.status, res.message);
+  const pcm = extractTtsPcm(res.data);
+  if (!pcm) throw new UpstreamError(502, "Нет аудио в ответе модели");
+  return {
+    pcm: pcm.bytes,
+    sampleRate: pcm.sampleRate,
+    channels: pcm.channels,
+    bits: pcm.bits,
+    source: res.source,
+    userIndex: res.userIndex,
+  };
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -95,12 +192,16 @@ serve(async (req) => {
     const { data: userData, error: userErr } = await sb.auth.getUser(token);
     if (userErr || !userData?.user) return json({ error: 'Unauthorized' }, 401);
 
-    const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
-    if (!LOVABLE_API_KEY) return json({ error: 'AI не настроен' }, 500);
-
     const body = await req.json();
     const transcript: string = (body?.transcript ?? '').toString().slice(0, 6000);
     if (!transcript.trim()) return json({ error: 'Пустой текст' }, 400);
+
+    const requestedProvider: AiProvider = parseProvider(body?.provider);
+    const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
+    const clientKeys = resolveClientKeys(body?.userKeys);
+    const attempts = buildAttempts(clientKeys, resolveStartIndex(body?.userKeyIndex), parseServerKeys(Deno.env.get("GEMINI_API_KEYS")));
+
+    if (!LOVABLE_API_KEY && attempts.length === 0) return json({ error: 'AI не настроен' }, 500);
 
     // voices: { "1": "Charon", "2": "Kore", ... }; legacy voice1/voice2 still supported
     const rawVoices: Record<string, unknown> = (body?.voices && typeof body.voices === 'object')
@@ -149,24 +250,44 @@ serve(async (req) => {
       return json({ error: `Слишком много голосов (максимум ${MAX_SPEAKERS}).` }, 400);
     }
 
-    const callGemini = async (payload: unknown) => {
-      const response = await fetch('https://ai.gateway.lovable.dev/v1/audio/speech', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${LOVABLE_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
-      return response;
-    };
-
     const mapError = (status: number) => {
       if (status === 429) return json({ error: 'Слишком много запросов, попробуйте чуть позже.' }, 429);
       if (status === 402) return json({ error: 'Недостаточно средств Lovable AI.' }, 402);
       if (status === 400) return json({ error: 'Не удалось озвучить этот текст. Проверьте формат реплик.' }, 400);
       return json({ error: 'Озвучка не удалась. Попробуйте снова.' }, 500);
     };
+
+    /** Один синтез: primary-бэкенд, при ошибке — запасной (если настроен). */
+    const synthesize = async (payload: ReturnType<typeof ttsPayload>): Promise<SynthResult> => {
+      const order: Backend[] = [requestedProvider, requestedProvider === "lovable" ? "gemini" : "lovable"];
+      let lastError: UpstreamError = new UpstreamError(500, "AI недоступен");
+      for (const backend of order) {
+        try {
+          if (backend === "lovable") {
+            if (!LOVABLE_API_KEY) continue;
+            const r = await synthLovable(payload, LOVABLE_API_KEY);
+            return { ...r, backend, source: "lovable", userIndex: -1 };
+          } else {
+            if (attempts.length === 0) continue;
+            const r = await synthGemini(payload, attempts);
+            return { ...r, backend };
+          }
+        } catch (e) {
+          lastError = e instanceof UpstreamError ? e : new UpstreamError(500, e instanceof Error ? e.message : "TTS error");
+          console.warn(`dialog-tts: backend ${backend} failed:`, lastError.message);
+        }
+      }
+      throw lastError;
+    };
+
+    const audioResponse = (wav: Uint8Array, meta: Pick<SynthResult, "backend" | "source" | "userIndex">) =>
+      new Response(wav, {
+        headers: {
+          ...corsHeaders,
+          'Content-Type': 'audio/wav',
+          ...providerResponseHeaders(meta.backend, meta.source, meta.userIndex),
+        },
+      });
 
     // 1–2 speakers: single request with Gemini multi-speaker (best quality/prosody)
     if (speakers.length <= 2) {
@@ -176,28 +297,20 @@ serve(async (req) => {
       }));
       const text = lines.map((l) => `Speaker ${l.speaker}: ${l.text}`).join('\n');
 
-      const response = await callGemini({
-        model: 'google/gemini-3.1-flash-tts-preview',
-        // Стиль персонажей (если пришёл) + сам текст: `## Style:` влияет на интонации.
-        contents: [{ role: 'user', parts: [{ text: ttsPrompt(speakers, text) }] }],
-        generationConfig: {
-          temperature: 1,
-          responseModalities: ['AUDIO'],
-          speechConfig: speakers.length === 2
+      let result: SynthResult;
+      try {
+        result = await synthesize(ttsPayload(
+          // Стиль персонажей (если пришёл) + сам текст: `## Style:` влияет на интонации.
+          ttsPrompt(speakers, text),
+          speakers.length === 2
             ? { multiSpeakerVoiceConfig: { speakerVoiceConfigs } }
             : { voiceConfig: { prebuiltVoiceConfig: { voiceName: voiceFor(speakers[0]) } } },
-        },
-      });
-
-      if (!response.ok) {
-        const errText = await response.text().catch(() => '');
-        console.error(`dialog-tts failed [${response.status}]:`, errText);
-        return mapError(response.status);
+        ));
+      } catch (e) {
+        return mapError(e instanceof UpstreamError ? e.status : 500);
       }
 
-      return new Response(response.body, {
-        headers: { ...corsHeaders, 'Content-Type': 'audio/wav' },
-      });
+      return audioResponse(buildWav(result.pcm, result.sampleRate, result.channels, result.bits), result);
     }
 
     // 3+ speakers: synthesize each line separately, then stitch into one WAV
@@ -207,32 +320,25 @@ serve(async (req) => {
 
     const parts: Uint8Array[] = [];
     let sampleRate = 24000, channels = 1, bits = 16;
+    let lastMeta: Pick<SynthResult, "backend" | "source" | "userIndex"> = { backend: requestedProvider, source: "lovable", userIndex: -1 };
 
     for (const line of lines) {
-      const response = await callGemini({
-        model: 'google/gemini-3.1-flash-tts-preview',
-        contents: [{ role: 'user', parts: [{ text: ttsPrompt([line.speaker], line.text) }] }],
-        generationConfig: {
-          temperature: 1,
-          responseModalities: ['AUDIO'],
-          speechConfig: {
-            voiceConfig: { prebuiltVoiceConfig: { voiceName: voiceFor(line.speaker) } },
-          },
-        },
-      });
-
-      if (!response.ok) {
-        const errText = await response.text().catch(() => '');
-        console.error(`dialog-tts line failed [${response.status}]:`, errText);
-        return mapError(response.status);
+      let result: SynthResult;
+      try {
+        // Реплика одного говорящего + его стиль: так интонации учитываются и
+        // при построчной сборке (3+ голосов).
+        result = await synthesize(ttsPayload(ttsPrompt([line.speaker], line.text), {
+          voiceConfig: { prebuiltVoiceConfig: { voiceName: voiceFor(line.speaker) } },
+        }));
+      } catch (e) {
+        console.error(`dialog-tts line failed:`, e);
+        return mapError(e instanceof UpstreamError ? e.status : 500);
       }
-
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      const info = findDataChunk(bytes);
-      sampleRate = info.sampleRate;
-      channels = info.channels;
-      bits = info.bits;
-      parts.push(bytes.subarray(info.offset, info.offset + info.length));
+      sampleRate = result.sampleRate;
+      channels = result.channels;
+      bits = result.bits;
+      lastMeta = result;
+      parts.push(result.pcm);
       parts.push(silence(220, sampleRate, channels, bits));
     }
 
@@ -241,10 +347,7 @@ serve(async (req) => {
     let offset = 0;
     for (const p of parts) { pcm.set(p, offset); offset += p.byteLength; }
 
-    const wav = buildWav(pcm, sampleRate, channels, bits);
-    return new Response(wav, {
-      headers: { ...corsHeaders, 'Content-Type': 'audio/wav' },
-    });
+    return audioResponse(buildWav(pcm, sampleRate, channels, bits), lastMeta);
   } catch (error) {
     console.error('dialog-tts error:', error);
     return json({ error: 'Озвучка не удалась. Попробуйте снова.' }, 500);
