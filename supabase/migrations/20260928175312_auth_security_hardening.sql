@@ -147,6 +147,7 @@ DROP POLICY "Public read published titles" ON public.titles;
 CREATE POLICY "Public read published titles"
   ON public.titles FOR SELECT TO anon
   USING (published = true);
+DROP POLICY IF EXISTS "Authenticated read published and admin titles" ON public.titles;
 CREATE POLICY "Authenticated read published and admin titles"
   ON public.titles FOR SELECT TO authenticated
   USING (published = true OR public.has_role(auth.uid(), 'admin'));
@@ -155,6 +156,7 @@ DROP POLICY "Public read published chapters" ON public.chapters;
 CREATE POLICY "Public read published chapters"
   ON public.chapters FOR SELECT TO anon
   USING (published = true);
+DROP POLICY IF EXISTS "Authenticated read published and admin chapters" ON public.chapters;
 CREATE POLICY "Authenticated read published and admin chapters"
   ON public.chapters FOR SELECT TO authenticated
   USING (published = true OR public.has_role(auth.uid(), 'admin'));
@@ -168,6 +170,7 @@ CREATE POLICY "Public read pages"
       WHERE chapters.id = pages.chapter_id AND chapters.published = true
     )
   );
+DROP POLICY IF EXISTS "Authenticated read published and admin pages" ON public.pages;
 CREATE POLICY "Authenticated read published and admin pages"
   ON public.pages FOR SELECT TO authenticated
   USING (
@@ -177,3 +180,9 @@ CREATE POLICY "Authenticated read published and admin pages"
         AND (chapters.published = true OR public.has_role(auth.uid(), 'admin'))
     )
   );
+
+
+-- The baseline revokes default Data API grants. Restore only what the app uses.
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.chats TO authenticated;
+GRANT SELECT, INSERT, DELETE ON public.messages TO authenticated;
+GRANT ALL ON public.chats, public.messages TO service_role;
