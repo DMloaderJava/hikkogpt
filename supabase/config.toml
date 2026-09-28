@@ -26,3 +26,18 @@ verify_jwt = false
 
 [functions.manga-analyze]
 verify_jwt = false
+
+# These endpoints enforce their own CAPTCHA, IP-rate-limit, or one-time
+# high-entropy token checks; no end-user JWT is expected at the gateway.
+[functions.submit-title]
+verify_jwt = false
+
+[functions.get-submission]
+verify_jwt = false
+
+[functions.login-confirm]
+verify_jwt = false
+
+# The proxy validates the caller JWT and administrator role inside the handler.
+[functions.gemini-proxy]
+verify_jwt = false

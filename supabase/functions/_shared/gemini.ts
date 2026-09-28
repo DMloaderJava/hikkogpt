@@ -166,7 +166,7 @@ export async function geminiGenerate(
   models: string[],
   payload: Record<string, unknown>,
   opts: { signal?: AbortSignal | null; fetchFn?: FetchFn; label?: string } = {},
-): Promise<GeminiSuccess<any> | GeminiFailure> {
+): Promise<GeminiSuccess<unknown> | GeminiFailure> {
   if (attempts.length === 0 || models.length === 0) {
     return { ok: false, status: 503, message: "Нет доступных ключей Gemini API" };
   }
@@ -187,7 +187,7 @@ export async function geminiGenerate(
   );
   if (!("resp" in result)) return result;
   try {
-    const data = await result.resp.json();
+    const data: unknown = await result.resp.json();
     return { ok: true, data, source: result.source, userIndex: result.userIndex, model: result.model };
   } catch {
     return { ok: false, status: 502, message: "Некорректный ответ Gemini API" };
@@ -227,6 +227,23 @@ export async function geminiGenerateStream(
   return { ok: true, resp: result.resp, source: result.source, userIndex: result.userIndex, model: result.model };
 }
 
+interface GeminiResponsePart {
+  text?: unknown;
+  thought?: unknown;
+  inlineData?: unknown;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function getGeminiResponseParts(data: unknown): GeminiResponsePart[] {
+  if (!isRecord(data) || !Array.isArray(data.candidates)) return [];
+  const candidate = data.candidates[0];
+  if (!isRecord(candidate) || !isRecord(candidate.content) || !Array.isArray(candidate.content.parts)) return [];
+  return candidate.content.parts.filter(isRecord) as GeminiResponsePart[];
+}
+
 /** Читает SSE-поток generateContent, отдавая текстовые дельты (и thought отдельно). */
 export async function readGeminiSseText(
   resp: Response,
@@ -242,13 +259,13 @@ export async function readGeminiSseText(
     const json = line.slice(6).trim();
     if (!json) return;
     try {
-      const parsed = JSON.parse(json);
-      const parts: any[] = parsed?.candidates?.[0]?.content?.parts || [];
+      const parsed: unknown = JSON.parse(json);
+      const parts = getGeminiResponseParts(parsed);
       let text = "";
       let thought = "";
       for (const p of parts) {
-        if (typeof p?.text !== "string" || !p.text) continue;
-        if (p.thought) thought += p.text;
+        if (typeof p.text !== "string" || !p.text) continue;
+        if (p.thought === true) thought += p.text;
         else text += p.text;
       }
       if (text) onText(text);
@@ -273,12 +290,12 @@ export async function readGeminiSseText(
 }
 
 /** Текст первой кандидатуры generateContent (без thought-частей). */
-export function extractGenerateText(data: any): string {
-  const parts: any[] = data?.candidates?.[0]?.content?.parts || [];
-  return parts
-    .filter((p) => typeof p?.text === "string" && p.text && !p.thought)
-    .map((p) => p.text as string)
-    .join("");
+export function extractGenerateText(data: unknown): string {
+  return getGeminiResponseParts(data).reduce((text, part) => {
+    return typeof part.text === "string" && part.text && part.thought !== true
+      ? text + part.text
+      : text;
+  }, "");
 }
 
 /** Снимает markdown-обёртку ```json ... ``` если модель её добавила. */
@@ -303,15 +320,16 @@ export interface TtsPcm {
 }
 
 /** Достаёт PCM из ответа TTS-модели (inlineData.base64, обычно L16/24k/mono). */
-export function extractTtsPcm(data: any): TtsPcm | null {
-  const parts: any[] = data?.candidates?.[0]?.content?.parts || [];
+export function extractTtsPcm(data: unknown): TtsPcm | null {
+  const parts = getGeminiResponseParts(data);
   for (const p of parts) {
-    const b64 = p?.inlineData?.data;
+    const inlineData = isRecord(p.inlineData) ? p.inlineData : null;
+    const b64 = inlineData?.data;
     if (typeof b64 !== "string" || b64.length === 0) continue;
     const bin = atob(b64);
     const bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    const mime: string = p?.inlineData?.mimeType || "";
+    const mime = typeof inlineData?.mimeType === "string" ? inlineData.mimeType : "";
     const rate = /rate=(\d+)/i.exec(mime)?.[1];
     return {
       bytes,

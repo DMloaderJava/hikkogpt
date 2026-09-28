@@ -58,8 +58,8 @@ export function ImageSearchModal({ onSelect, onClose }: ImageSearchModalProps) {
       } else {
         setResults(imgs);
       }
-    } catch (e: any) {
-      setError(e.message || "Ошибка");
+    } catch (error: unknown) {
+      setError(error instanceof Error ? error.message : "Ошибка");
     } finally {
       setLoading(false);
     }

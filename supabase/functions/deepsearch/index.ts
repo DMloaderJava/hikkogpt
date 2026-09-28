@@ -60,7 +60,7 @@ const ANALYST_SYSTEM =
 
 Пиши на русском языке.`;
 
-function sendSSE(controller: ReadableStreamDefaultController, encoder: TextEncoder, event: string, data: any) {
+function sendSSE(controller: ReadableStreamDefaultController, encoder: TextEncoder, event: string, data: Record<string, unknown>) {
   controller.enqueue(encoder.encode(`data: ${JSON.stringify({ event, ...data })}\n\n`));
 }
 
@@ -215,14 +215,15 @@ async function generateClarifyingQuestionsGemini(
     { label: "deepsearch-clarify" },
   );
   if (!res.ok) throw new Error(res.message);
-  let parsed: any;
+  let parsed: unknown;
   try {
     parsed = JSON.parse(extractJsonText(extractGenerateText(res.data)));
   } catch {
     throw new Error("Некорректный JSON от модели");
   }
-  if (!Array.isArray(parsed?.questions)) throw new Error("Нет questions в ответе модели");
-  return { value: parsed.questions.filter((q: unknown) => typeof q === "string"), source: res.source, userIndex: res.userIndex };
+  const questions = asRecord(parsed)?.questions;
+  if (!Array.isArray(questions)) throw new Error("Нет questions в ответе модели");
+  return { value: questions.filter((q: unknown): q is string => typeof q === "string"), source: res.source, userIndex: res.userIndex };
 }
 
 async function generateSearchQueriesGemini(
@@ -241,14 +242,15 @@ async function generateSearchQueriesGemini(
     { label: "deepsearch-queries" },
   );
   if (!res.ok) throw new Error(res.message);
-  let parsed: any;
+  let parsed: unknown;
   try {
     parsed = JSON.parse(extractJsonText(extractGenerateText(res.data)));
   } catch {
     throw new Error("Некорректный JSON от модели");
   }
-  if (!Array.isArray(parsed?.queries)) throw new Error("Нет queries в ответе модели");
-  return { value: parsed.queries.filter((q: unknown) => typeof q === "string"), source: res.source, userIndex: res.userIndex };
+  const queries = asRecord(parsed)?.queries;
+  if (!Array.isArray(queries)) throw new Error("Нет queries в ответе модели");
+  return { value: queries.filter((q: unknown): q is string => typeof q === "string"), source: res.source, userIndex: res.userIndex };
 }
 
 interface SearchResult {
@@ -256,6 +258,16 @@ interface SearchResult {
   title: string;
   description: string;
   markdown?: string;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function stringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value : "";
 }
 
 async function firecrawlSearch(query: string, apiKey: string): Promise<SearchResult[]> {
@@ -275,13 +287,19 @@ async function firecrawlSearch(query: string, apiKey: string): Promise<SearchRes
       return [];
     }
 
-    const data = await resp.json();
-    return (data.data || []).map((r: any) => ({
-      url: r.url || "",
-      title: r.title || "",
-      description: r.description || "",
-      markdown: r.markdown || "",
-    }));
+    const data: unknown = await resp.json();
+    const rows = asRecord(data)?.data;
+    if (!Array.isArray(rows)) return [];
+    return rows.map((row: unknown) => {
+      const result = asRecord(row) ?? {};
+      const markdown = stringOrEmpty(result.markdown);
+      return {
+        url: stringOrEmpty(result.url),
+        title: stringOrEmpty(result.title),
+        description: stringOrEmpty(result.description),
+        ...(markdown ? { markdown } : {}),
+      };
+    });
   } catch (e) {
     console.error(`Firecrawl search exception for "${query}":`, e);
     return [];
@@ -492,7 +510,7 @@ serve(async (req) => {
             sendSSE(controller, encoder, "status", { message: `Создано ${searchQueries.length} запросов. Начинаю поиск...` });
 
             // Step 2: Parallel Firecrawl search (batches of 5)
-            let allResults: SearchResult[] = [];
+            const allResults: SearchResult[] = [];
             for (let i = 0; i < searchQueries.length; i += 5) {
               const batch = searchQueries.slice(i, i + 5);
               const batchResults = await Promise.all(

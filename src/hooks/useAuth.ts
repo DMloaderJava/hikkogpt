@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
+import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import type { User, Session } from "@supabase/supabase-js";
 
@@ -8,25 +9,43 @@ export function useAuth() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (_event, session) => {
-        setSession(session);
-        setUser(session?.user ?? null);
-        setLoading(false);
-      }
-    );
+    let mounted = true;
+    let authEventCount = 0;
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUser(session?.user ?? null);
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      authEventCount += 1;
+      setSession(nextSession);
+      setUser(nextSession?.user ?? null);
       setLoading(false);
     });
 
-    return () => subscription.unsubscribe();
+    void supabase.auth.getSession().then(({ data, error }) => {
+      if (!mounted || authEventCount > 0) return;
+      if (error) console.error("Failed to read Supabase session:", error);
+      setSession(data.session);
+      setUser(data.session?.user ?? null);
+      setLoading(false);
+    }).catch((error: unknown) => {
+      if (!mounted || authEventCount > 0) return;
+      console.error("Failed to initialize Supabase auth:", error);
+      setSession(null);
+      setUser(null);
+      setLoading(false);
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   const signOut = async () => {
-    await supabase.auth.signOut();
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) toast.error(error.message || "Не удалось выйти из аккаунта");
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : "Не удалось выйти из аккаунта");
+    }
   };
 
   return { user, session, loading, signOut };

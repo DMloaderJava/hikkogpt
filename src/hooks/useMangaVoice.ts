@@ -513,7 +513,7 @@ export function useMangaVoice({ preferredApi }: UseMangaVoiceOptions = {}) {
 
     // Остановку пользователем успехом не считаем: часть батчей не ушла.
     return failures.length === 0 && !stoppedRef.current;
-  }, [reportFailure, updatePages]);
+  }, [aiRequestFields, onResponse, reportFailure, updatePages]);
 
   /* ------------------------------------------------------------------ */
   /* Озвучка кадра (dialog-tts)                                          */
@@ -558,7 +558,7 @@ export function useMangaVoice({ preferredApi }: UseMangaVoiceOptions = {}) {
     if (!released && !pagesRef.current.some((p) => p.id === page.id)) URL.revokeObjectURL(url);
     setAutoPlayKey(`${page.id}:${url}`);
     return url;
-  }, [updatePages]);
+  }, [aiRequestFields, onResponse, updatePages]);
 
   /**
    * «Озвучить кадр»: проверка лимитов до запроса, сам запрос с `signal`,

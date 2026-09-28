@@ -28,5 +28,5 @@ export async function readDocument(file: File): Promise<string> {
     await pdf.destroy();
   } else text = await file.text();
   if (!text.trim()) throw new Error('В файле нет извлекаемого текста (скан PDF не поддерживается)');
-  return `[Файл: ${file.name.replace(/[\[\]\n\r]/g, '_')}]\n${text.slice(0, MAX_DOCUMENT_CHARS)}${text.length > MAX_DOCUMENT_CHARS ? '\n[Текст обрезан]' : ''}\n[/Файл]`;
+  return `[Файл: ${file.name.replace(/\[/g, "_").replace(/\]/g, "_").replace(/[\n\r]/g, '_')}]\n${text.slice(0, MAX_DOCUMENT_CHARS)}${text.length > MAX_DOCUMENT_CHARS ? '\n[Текст обрезан]' : ''}\n[/Файл]`;
 }

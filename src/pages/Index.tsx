@@ -20,6 +20,8 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { resolveLiveVoiceName } from "@/types/gemini-live";
 import type { SoundEffectType } from "@/types/gemini-live";
 
+const SPECIAL_MODELS = new Set(["Илон Маск", "Прохожий0"]);
+
 const Index = () => {
   const {
     chats, activeChat, activeChatId, isStreaming,
@@ -123,11 +125,9 @@ const Index = () => {
     }
   }, [activeChatId, resetDeepSearchForNewChat]);
 
-  const characters = ["Илон Маск", "Прохожий0"];
-
   const handleModelSelect = useCallback((model: string) => {
     setSelectedModel(model);
-    if (characters.includes(model)) setActiveChatId(null);
+    if (SPECIAL_MODELS.has(model)) setActiveChatId(null);
   }, [setSelectedModel, setActiveChatId]);
 
   const handleProviderChange = useCallback((provider: AiProvider) => {

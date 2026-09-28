@@ -38,13 +38,53 @@ interface GeminiContent {
   parts: GeminiPart[];
 }
 
+interface OpenAIContentPart {
+  type?: unknown;
+  text?: unknown;
+  image_url?: unknown;
+}
+
+interface OpenAIMessage {
+  role: string;
+  content: string | OpenAIContentPart[];
+}
+
+interface GeminiResponsePart {
+  text?: unknown;
+  thought?: unknown;
+}
+
+interface LovableChatRequest {
+  model: string;
+  messages: OpenAIMessage[];
+  stream: true;
+  thinking?: { type: "enabled"; budget_tokens: number };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isOpenAIMessage(value: unknown): value is OpenAIMessage {
+  return isRecord(value) && typeof value.role === "string" &&
+    (typeof value.content === "string" ||
+      (Array.isArray(value.content) && value.content.every(isRecord)));
+}
+
+function getGeminiResponseParts(data: unknown): GeminiResponsePart[] {
+  if (!isRecord(data) || !Array.isArray(data.candidates)) return [];
+  const candidate = data.candidates[0];
+  if (!isRecord(candidate) || !isRecord(candidate.content) || !Array.isArray(candidate.content.parts)) return [];
+  return candidate.content.parts.filter(isRecord) as GeminiResponsePart[];
+}
+
 /**
  * OpenAI-формат сообщений -> формат Gemini generateContent.
  * Поддерживает текстовые части и image_url (base64 data URL -> inlineData).
  * Системные сообщения выносятся отдельно — Gemini принимает их
  * через systemInstruction, а не в contents.
  */
-function toGeminiContents(messages: any[]): { systemTexts: string[]; contents: GeminiContent[] } {
+function toGeminiContents(messages: OpenAIMessage[]): { systemTexts: string[]; contents: GeminiContent[] } {
   const systemTexts: string[] = [];
   const raw: GeminiContent[] = [];
 
@@ -64,11 +104,12 @@ function toGeminiContents(messages: any[]): { systemTexts: string[]; contents: G
     if (Array.isArray(m.content)) {
       const parts: GeminiPart[] = [];
       for (const part of m.content) {
-        if (part?.type === "text" && part.text) {
+        if (part.type === "text" && typeof part.text === "string" && part.text) {
           if (m.role === "system") systemTexts.push(part.text);
           else parts.push({ text: part.text });
-        } else if (part?.type === "image_url") {
-          const url: string = part.image_url?.url || "";
+        } else if (part.type === "image_url") {
+          const image = isRecord(part.image_url) ? part.image_url : null;
+          const url = typeof image?.url === "string" ? image.url : "";
           const match = url.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,(.+)$/);
           if (match) {
             parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
@@ -123,15 +164,15 @@ function geminiSseResponse(upstream: Response, keySource: "user" | "server", use
         const json = line.slice(6).trim();
         if (!json) continue;
         try {
-          const parsed = JSON.parse(json);
-          const parts: any[] = parsed?.candidates?.[0]?.content?.parts || [];
+          const parsed: unknown = JSON.parse(json);
+          const parts = getGeminiResponseParts(parsed);
           let text = "";
           let reasoning = "";
-          for (const p of parts) {
-            if (!p?.text) continue;
+          for (const part of parts) {
+            if (typeof part.text !== "string" || !part.text) continue;
             // thought-части (thinking) маппим в reasoning_content — UI показывает их как thinking.
-            if (p.thought) reasoning += p.text;
-            else text += p.text;
+            if (part.thought === true) reasoning += part.text;
+            else text += part.text;
           }
           if (text || reasoning) {
             const delta: Record<string, string> = {};
@@ -176,7 +217,7 @@ interface KeyAttempt {
 async function callGeminiDirect(
   aiModel: string,
   systemContent: string,
-  messages: any[],
+  messages: OpenAIMessage[],
   thinking: boolean,
   clientKeys: string[] = [],
   startIndex = 0,
@@ -313,16 +354,33 @@ serve(async (req) => {
       console.warn("quota check skipped:", e);
     }
 
-    const { messages, model, thinking, provider, userKeys, userKeyIndex } = await req.json();
+    const requestData: unknown = await req.json();
+    if (!isRecord(requestData)) {
+      return new Response(JSON.stringify({ error: "Invalid request body" }), {
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const messages = Array.isArray(requestData.messages) ? requestData.messages.filter(isOpenAIMessage) : [];
+    if (messages.length === 0) {
+      return new Response(JSON.stringify({ error: "At least one valid message is required" }), {
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const model = typeof requestData.model === "string" ? requestData.model : "HikkoGPT";
+    const thinking = requestData.thinking === true;
+    const provider = requestData.provider;
+    const userKeys = requestData.userKeys;
+    const userKeyIndex = requestData.userKeyIndex;
+
     // Ключи пользователя из настроек (до 15): пробуются первыми, с активного индекса.
     const clientKeys: string[] = Array.isArray(userKeys)
       ? userKeys
-        .filter((k: unknown): k is string => typeof k === "string" && k.trim().length >= 8 && k.trim().length <= 300)
-        .map((k: string) => k.trim())
+        .filter((key: unknown): key is string => typeof key === "string" && key.trim().length >= 8 && key.trim().length <= 300)
+        .map((key: string) => key.trim())
         .slice(0, 15)
       : [];
-    const clientKeyIndex = Number.isInteger(userKeyIndex) && (userKeyIndex as number) >= 0
-      ? (userKeyIndex as number)
+    const clientKeyIndex = typeof userKeyIndex === "number" && Number.isInteger(userKeyIndex) && userKeyIndex >= 0
+      ? userKeyIndex
       : 0;
     const requestedProvider: AiProvider = provider === "gemini" ? "gemini" : "lovable";
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
@@ -483,7 +541,7 @@ serve(async (req) => {
 
     const systemContent = systemPrompts[model] || hikkoBasePrompt;
 
-    const lovableBody: any = {
+    const lovableBody: LovableChatRequest = {
       model: aiModel,
       messages: [
         { role: "system", content: systemContent },

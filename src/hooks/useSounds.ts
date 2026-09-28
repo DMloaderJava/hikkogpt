@@ -4,6 +4,7 @@ import { useCallback, useRef } from "react";
 // Two short pleasant tones: "send" (rising) and "receive" (soft chime).
 
 type SoundType = "send" | "receive";
+type AudioContextWindow = Window & { webkitAudioContext?: typeof AudioContext };
 
 export function useSounds(enabled = true) {
   const ctxRef = useRef<AudioContext | null>(null);
@@ -11,7 +12,7 @@ export function useSounds(enabled = true) {
   const getCtx = () => {
     if (typeof window === "undefined") return null;
     if (!ctxRef.current) {
-      const Ctx = (window.AudioContext || (window as any).webkitAudioContext) as typeof AudioContext | undefined;
+      const Ctx = window.AudioContext ?? (window as AudioContextWindow).webkitAudioContext;
       if (!Ctx) return null;
       ctxRef.current = new Ctx();
     }

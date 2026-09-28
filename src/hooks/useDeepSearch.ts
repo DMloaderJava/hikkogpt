@@ -169,7 +169,7 @@ export function useDeepSearch() {
     }
 
     abortRef.current = null;
-  }, [provider, userKeys, userKeyIndex, setActiveKeyIndex]);
+  }, [provider, state.phase, userKeys, userKeyIndex, setActiveKeyIndex]);
 
   const stopSearch = useCallback(() => {
     abortRef.current?.abort();
