@@ -3,7 +3,11 @@
 import { writeFileSync } from "fs";
 import { resolve } from "path";
 
-const BASE_URL = "https://hikkogptsecret.vercel.app";
+const configuredBaseUrl = process.env.VITE_SITE_URL ??
+  (process.env.VERCEL_PROJECT_PRODUCTION_URL
+    ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+    : "https://hikkogptsecret.vercel.app");
+const BASE_URL = configuredBaseUrl.replace(/\/+$/, "");
 
 interface SitemapEntry {
   path: string;

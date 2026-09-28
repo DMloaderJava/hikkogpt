@@ -437,13 +437,14 @@ describe("renderStoryVideo: отмена и отказы", () => {
       { frames: FRAMES, slides: SLIDES, audio: AUDIO, signal: controller.signal },
       harness.deps
     );
+    const aborted = expect(promise).rejects.toMatchObject({ name: "AbortError" });
 
     await harness.flush();
     await harness.step(0.2);
     controller.abort();
     await harness.flush();
 
-    await expect(promise).rejects.toMatchObject({ name: "AbortError" });
+    await aborted;
     expect(harness.events).toContain("recorder.stop");
     expect(harness.events).toContain("close");
     expect(harness.hasPending()).toBe(false);

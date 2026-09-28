@@ -84,22 +84,29 @@ export function useChat() {
   });
   const { play: playSound } = useSounds(soundsEnabled);
   const abortRef = useRef<AbortController | null>(null);
-  const loadedRef = useRef(false);
+  const loadedUserIdRef = useRef<string | null>(null);
+  const loadingMsgsRef = useRef<Set<string>>(new Set());
 
   const toggleSounds = useCallback(() => {
     setSoundsEnabled((v) => {
       const nv = !v;
-      try { localStorage.setItem("hikko_sounds", nv ? "1" : "0"); } catch {}
+      try { localStorage.setItem("hikko_sounds", nv ? "1" : "0"); } catch { /* storage may be unavailable */ }
       return nv;
     });
   }, []);
 
   const activeChat = chats.find((c) => c.id === activeChatId) || null;
 
-  // Load chats list (without messages) on mount
+  // Load chats for the active user; never keep another user's list after auth changes.
   useEffect(() => {
-    if (!user || loadedRef.current) return;
-    loadedRef.current = true;
+    const userId = user?.id ?? null;
+    if (loadedUserIdRef.current === userId) return;
+
+    loadedUserIdRef.current = userId;
+    setChats([]);
+    setActiveChatId(null);
+    loadingMsgsRef.current.clear();
+    if (!user) return;
 
     (async () => {
       const { data: dbChats, error } = await supabase
@@ -108,7 +115,12 @@ export function useChat() {
         .eq("user_id", user.id)
         .order("updated_at", { ascending: false });
 
-      if (error || !dbChats) return;
+      if (loadedUserIdRef.current !== userId) return;
+      if (error || !dbChats) {
+        loadedUserIdRef.current = null;
+        toast.error("Не удалось загрузить список чатов");
+        return;
+      }
 
       const chatList: Chat[] = dbChats.map((c) => ({
         id: c.id,
@@ -123,8 +135,6 @@ export function useChat() {
   }, [user]);
 
   // Load messages only when a chat is selected
-  const loadingMsgsRef = useRef<Set<string>>(new Set());
-
   useEffect(() => {
     if (!activeChatId || !user) return;
     const chat = chats.find((c) => c.id === activeChatId);
@@ -135,29 +145,41 @@ export function useChat() {
     const chatId = activeChatId;
 
     (async () => {
-      const { data: msgs } = await supabase
-        .from("messages")
-        .select("*")
-        .eq("chat_id", chatId)
-        .order("created_at", { ascending: true });
+      try {
+        const { data: msgs, error } = await supabase
+          .from("messages")
+          .select("*")
+          .eq("chat_id", chatId)
+          .order("created_at", { ascending: true });
 
-      setChats((prev) =>
-        prev.map((c) =>
-          c.id === chatId
-            ? {
-                ...c,
-                messages: (msgs || []).map((m: any) => ({
-                  id: m.id,
-                  role: m.role,
-                  content: m.content,
-                  image_url: m.image_url || undefined,
-                  timestamp: new Date(m.created_at),
-                })),
-              }
-            : c
-        )
-      );
-      loadingMsgsRef.current.delete(chatId);
+        if (loadedUserIdRef.current !== user.id) return;
+        if (error) {
+          toast.error("Не удалось загрузить сообщения чата");
+          return;
+        }
+
+        setChats((prev) =>
+          prev.map((c) =>
+            c.id === chatId
+              ? {
+                  ...c,
+                  messages: (msgs || []).map((m) => ({
+                    id: m.id,
+                    role: m.role as Message["role"],
+                    content: m.content,
+                    image_url: m.image_url || undefined,
+                    timestamp: new Date(m.created_at),
+                  })),
+                }
+              : c
+          )
+        );
+      } catch (error) {
+        console.error("Не удалось загрузить сообщения чата:", error);
+        toast.error("Не удалось загрузить сообщения чата");
+      } finally {
+        loadingMsgsRef.current.delete(chatId);
+      }
     })();
   }, [activeChatId, user, chats]);
 
@@ -469,11 +491,19 @@ export function useChat() {
         }
 
         // Ensure earlier DB writes finished, then save assistant message in parallel with updated_at
-        await dbWrites;
-        Promise.all([
+        const initialWriteResults = await dbWrites;
+        const [assistantWrite, chatUpdate] = await Promise.all([
           supabase.from("messages").insert({ chat_id: chatId, role: "assistant", content: assistantSoFar }),
           supabase.from("chats").update({ updated_at: new Date().toISOString() }).eq("id", chatId),
         ]);
+        if (initialWriteResults.some(({ error }) => error) || assistantWrite.error || chatUpdate.error) {
+          console.error("Ответ получен, но не все изменения чата удалось сохранить", {
+            initialWriteResults,
+            assistantWrite: assistantWrite.error,
+            chatUpdate: chatUpdate.error,
+          });
+          toast.error("Ответ получен, но не удалось полностью сохранить чат");
+        }
       } catch (e: unknown) {
         if (isAbortError(e, controller.signal)) {
           // Пользователь нажал «Стоп» — это не ошибка
@@ -488,7 +518,7 @@ export function useChat() {
       setIsStreaming(false);
       abortRef.current = null;
     },
-    [activeChatId, chats, selectedModel, thinkingEnabled, aiProvider, userGeminiKeys, activeKeyIndex, setActiveKeyIndex, user]
+    [activeChatId, chats, selectedModel, thinkingEnabled, aiProvider, userGeminiKeys, activeKeyIndex, setActiveKeyIndex, user, playSound]
   );
 
   const stopStreaming = useCallback(() => {
