@@ -5,13 +5,15 @@
  *   (ключ LOVABLE_API_KEY на стороне edge-функции).
  * - `gemini` — запросы идут напрямую в Google Generative Language API
  *   (ключи GEMINI_API_KEYS на стороне edge-функции).
+ * - `grok` — запросы идут напрямую в xAI API
+ *   (секрет XAI_API_KEY на стороне edge-функции).
  *
  * Выбор хранится в localStorage и отправляется в edge-функцию `chat`
  * в поле `provider`. Если выбранный провайдер недоступен, сервер
  * автоматически переключается на запасной.
  */
 
-export type AiProvider = "lovable" | "gemini";
+export type AiProvider = "lovable" | "gemini" | "grok";
 
 export const AI_PROVIDER_STORAGE_KEY = "hikko-ai-provider";
 
@@ -38,12 +40,18 @@ export const AI_PROVIDERS: Record<AiProvider, AiProviderMeta> = {
     shortLabel: "Gemini",
     description: "Напрямую через Google",
   },
+  grok: {
+    id: "grok",
+    label: "Grok API",
+    shortLabel: "Grok",
+    description: "Для чата напрямую через xAI; при сбое — Lovable/Gemini",
+  },
 };
 
-export const AI_PROVIDER_IDS: AiProvider[] = ["lovable", "gemini"];
+export const AI_PROVIDER_IDS: AiProvider[] = ["lovable", "gemini", "grok"];
 
 export function isAiProvider(value: unknown): value is AiProvider {
-  return value === "lovable" || value === "gemini";
+  return value === "lovable" || value === "gemini" || value === "grok";
 }
 
 export function getStoredAiProvider(): AiProvider {

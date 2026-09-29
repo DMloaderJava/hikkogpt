@@ -353,7 +353,7 @@ export function useChat() {
         // Сервер сообщает, какой провайдер реально обработал запрос
         // (x-ai-provider). Если это запасной — предупреждаем пользователя.
         const actualProvider = resp.headers.get("x-ai-provider");
-        if (actualProvider && actualProvider !== aiProvider && (actualProvider === "lovable" || actualProvider === "gemini")) {
+        if (actualProvider && actualProvider !== aiProvider && (actualProvider === "lovable" || actualProvider === "gemini" || actualProvider === "grok")) {
           toast.info(`Отвечаю через ${AI_PROVIDERS[actualProvider as AiProvider].label} — выбранный провайдер недоступен`);
         }
 

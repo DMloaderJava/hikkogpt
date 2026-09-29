@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+import { callXaiChat } from "./xai.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -9,7 +10,7 @@ const corsHeaders = {
   "Access-Control-Expose-Headers": "x-ai-provider",
 };
 
-type AiProvider = "lovable" | "gemini";
+type AiProvider = "lovable" | "gemini" | "grok";
 
 const LOVABLE_CHAT_URL = "https://ai.gateway.lovable.dev/v1/chat/completions";
 
@@ -311,6 +312,16 @@ function lovableSseResponse(upstream: Response): Response {
   });
 }
 
+function grokSseResponse(upstream: Response): Response {
+  return new Response(upstream.body, {
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "text/event-stream",
+      "x-ai-provider": "grok",
+    },
+  });
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -382,8 +393,10 @@ serve(async (req) => {
     const clientKeyIndex = typeof userKeyIndex === "number" && Number.isInteger(userKeyIndex) && userKeyIndex >= 0
       ? userKeyIndex
       : 0;
-    const requestedProvider: AiProvider = provider === "gemini" ? "gemini" : "lovable";
+    const requestedProvider: AiProvider = provider === "grok" ? "grok" : provider === "gemini" ? "gemini" : "lovable";
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+    const XAI_API_KEY = Deno.env.get("XAI_API_KEY");
+    const GROK_CHAT_MODEL = Deno.env.get("GROK_CHAT_MODEL")?.trim() || "grok-4.7";
 
     const modelMap: Record<string, string> = {
       "HikkoGPT": "google/gemini-3.1-pro-preview",
@@ -554,6 +567,33 @@ serve(async (req) => {
       if (aiModel.includes("gemini-2.5")) {
         lovableBody.thinking = { type: "enabled", budget_tokens: 8192 };
       }
+    }
+
+    // === Выбран Grok API: прямой xAI вызов, затем Lovable и Gemini ===
+    if (requestedProvider === "grok") {
+      const grokResponse = await callXaiChat(
+        XAI_API_KEY,
+        GROK_CHAT_MODEL,
+        [{ role: "system", content: systemContent }, ...messages],
+        thinking,
+      );
+      if (grokResponse) return grokSseResponse(grokResponse);
+
+      console.log("Grok API unavailable, falling back to Lovable gateway");
+      if (LOVABLE_API_KEY) {
+        const lovableFallback = await callLovable(LOVABLE_API_KEY, lovableBody);
+        if (lovableFallback.ok && lovableFallback.body) return lovableSseResponse(lovableFallback);
+        console.warn(`Lovable fallback failed [${lovableFallback.status}]`);
+      }
+
+      console.log("Lovable unavailable, falling back to direct Gemini API");
+      const geminiFallback = await callGeminiDirect(aiModel, systemContent, messages, thinking, clientKeys, clientKeyIndex);
+      if (geminiFallback) return geminiFallback.response;
+
+      return new Response(
+        JSON.stringify({ error: "Grok API недоступен, а резервные провайдеры не настроены или тоже недоступны." }),
+        { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
     }
 
     // === Выбран Gemini API: прямой вызов Google, запасной — Lovable ===
