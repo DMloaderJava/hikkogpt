@@ -1,4 +1,4 @@
-import { Heart, Sparkles } from "lucide-react";
+import { Heart, Sparkles, Zap } from "lucide-react";
 import { AI_PROVIDERS, type AiProvider } from "@/types/ai-provider";
 import { cn } from "@/lib/utils";
 
@@ -12,6 +12,7 @@ interface ProviderSelectorProps {
 const PROVIDER_ICONS: Record<AiProvider, typeof Sparkles> = {
   lovable: Heart,
   gemini: Sparkles,
+  grok: Zap,
 };
 
 export function ProviderSelector({ value, onChange, variant = "full" }: ProviderSelectorProps) {
@@ -50,7 +51,7 @@ export function ProviderSelector({ value, onChange, variant = "full" }: Provider
   }
 
   return (
-    <div role="radiogroup" aria-label="API-провайдер" className="grid grid-cols-2 gap-1.5">
+    <div role="radiogroup" aria-label="API-провайдер" className="grid grid-cols-3 gap-1.5">
       {(Object.keys(AI_PROVIDERS) as AiProvider[]).map((id) => {
         const meta = AI_PROVIDERS[id];
         const Icon = PROVIDER_ICONS[id];
