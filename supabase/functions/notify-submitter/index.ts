@@ -2,7 +2,7 @@
 // Вызывается из /admin/requests после resolve и всегда завершает обработку без письма.
 //
 // POST { email, status: 'approved'|'rejected'|'spam', title?, reason?, siteUrl? }
-// Auth: только админ/owner (проверка через has_role, как в login-notify).
+// Auth: только админ/owner (проверка через has_role).
 //
 // Внешние email-секреты не требуются.
 // Деплой: supabase functions deploy notify-submitter

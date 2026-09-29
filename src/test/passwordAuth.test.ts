@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
@@ -106,7 +106,7 @@ describe("email confirmation links are disabled", () => {
     const result = await signUpWithoutEmailLink(auth, "user@example.com", "secret1");
 
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.message).not.toMatch(/Проверьте почту/);
+    if (result.ok === false) expect(result.message).not.toMatch(/Проверьте почту/);
     expect(auth.signUp).not.toHaveBeenCalled();
     expect(auth.signIn).not.toHaveBeenCalled();
   });
@@ -145,5 +145,36 @@ describe("auth-register input", () => {
     const config = readFileSync(resolve(process.cwd(), "supabase/config.toml"), "utf8");
     const section = config.match(/\[functions\.auth-register\][\s\S]*?(?=\n\[|$)/);
     expect(section?.[0]).toMatch(/verify_jwt\s*=\s*false/);
+  });
+});
+
+describe("email confirmations are off for good", () => {
+  it("ships one idempotent SQL migration: confirm users + auto-confirm trigger + login guard cleanup", () => {
+    const dir = resolve(process.cwd(), "supabase", "migrations");
+    const migrations = readdirSync(dir).filter((f) => f.endsWith(".sql"));
+    const confirmations = migrations.filter((f) => /disable.*email.*\.sql$/i.test(f));
+    expect(confirmations).toHaveLength(1);
+
+    const sql = readFileSync(resolve(dir, confirmations[0]!), "utf8");
+    // Существующие аккаунты подтверждаются сразу.
+    expect(sql).toMatch(/UPDATE auth\.users[\s\S]*?email_confirmed_at = now\(\)/);
+    // Новые строки auth.users подтверждаются триггером.
+    expect(sql).toMatch(/CREATE OR REPLACE FUNCTION public\.auto_confirm_auth_user\(\)/);
+    expect(sql).toMatch(/CREATE TRIGGER auto_confirm_auth_user\s+BEFORE INSERT ON auth\.users/);
+    // Запасной путь для edge-функции auth-register (только service_role).
+    expect(sql).toMatch(/CREATE OR REPLACE FUNCTION public\.confirm_auth_email\(p_email text\)/);
+    expect(sql).toMatch(/GRANT EXECUTE ON FUNCTION public\.confirm_auth_email\(text\) TO service_role/);
+    // Login guard (подтверждение входа админа письмом) убирается из БД.
+    expect(sql).toMatch(/DROP TABLE IF EXISTS public\.login_challenges/);
+  });
+
+  it("removes the login guard (email confirmation on admin login) from the repo", () => {
+    expect(existsSync(resolve(process.cwd(), "supabase", "functions", "login-notify"))).toBe(false);
+    expect(existsSync(resolve(process.cwd(), "supabase", "functions", "login-confirm"))).toBe(false);
+    expect(existsSync(resolve(process.cwd(), "supabase", "functions", "_shared", "loginMailTemplate.ts"))).toBe(false);
+    expect(existsSync(resolve(process.cwd(), "supabase", "functions", "_shared", "loginChallengeToken.ts"))).toBe(false);
+
+    const config = readFileSync(resolve(process.cwd(), "supabase/config.toml"), "utf8");
+    expect(config).not.toMatch(/\[functions\.login-(notify|confirm)\]/);
   });
 });

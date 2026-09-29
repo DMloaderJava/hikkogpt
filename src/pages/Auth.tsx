@@ -59,7 +59,7 @@ const Auth = ({ user, authLoading }: AuthProps) => {
         email.trim(),
         password,
       );
-      if (!result.ok) {
+      if (result.ok === false) {
         setError(result.message);
       } else {
         toast.success("Вы успешно вошли!");
@@ -102,7 +102,7 @@ const Auth = ({ user, authLoading }: AuthProps) => {
         email.trim(),
         password,
       );
-      if (!result.ok) {
+      if (result.ok === false) {
         setError(result.message);
       } else {
         toast.success("Аккаунт создан! Вы вошли в систему.");

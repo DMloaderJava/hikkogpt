@@ -43,9 +43,6 @@ verify_jwt = false
 [functions.get-submission]
 verify_jwt = false
 
-[functions.login-confirm]
-verify_jwt = false
-
 # The proxy validates the caller JWT and administrator role inside the handler.
 [functions.gemini-proxy]
 verify_jwt = false

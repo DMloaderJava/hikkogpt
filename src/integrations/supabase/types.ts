@@ -261,48 +261,6 @@ export type Database = {
         }
         Relationships: []
       }
-      login_challenges: {
-        Row: {
-          admin_email: string | null
-          created_at: string
-          expires_at: string
-          id: string
-          ip: string | null
-          resolved_at: string | null
-          session_id: string | null
-          status: string
-          token: string
-          user_agent: string | null
-          user_id: string
-        }
-        Insert: {
-          admin_email?: string | null
-          created_at?: string
-          expires_at?: string
-          id?: string
-          ip?: string | null
-          resolved_at?: string | null
-          session_id?: string | null
-          status?: string
-          token: string
-          user_agent?: string | null
-          user_id: string
-        }
-        Update: {
-          admin_email?: string | null
-          created_at?: string
-          expires_at?: string
-          id?: string
-          ip?: string | null
-          resolved_at?: string | null
-          session_id?: string | null
-          status?: string
-          token?: string
-          user_agent?: string | null
-          user_id?: string
-        }
-        Relationships: []
-      }
       messages: {
         Row: {
           chat_id: string
@@ -514,25 +472,10 @@ export type Database = {
       cleanup_ip_rate_limit: { Args: never; Returns: undefined }
       cleanup_rate_limit_log: { Args: never; Returns: undefined }
       cleanup_rejected_submissions: { Args: never; Returns: undefined }
-      create_login_challenge: {
-        Args: {
-          p_admin_email?: string
-          p_ip?: string
-          p_session_id?: string
-          p_token: string
-          p_ttl_minutes?: number
-          p_user_agent?: string
-        }
-        Returns: string
-      }
+      confirm_auth_email: { Args: { p_email: string }; Returns: boolean }
       has_role: {
         Args: { role_to_check: string; uid: string }
         Returns: boolean
-      }
-      latest_login_challenge_status: { Args: never; Returns: string }
-      resolve_login_challenge: {
-        Args: { p_action: string; p_token: string }
-        Returns: string
       }
       slugify_title: { Args: { p_text: string }; Returns: string }
     }
