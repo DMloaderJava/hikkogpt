@@ -225,9 +225,14 @@ const Index = () => {
             </button>
           )}
           <ChatSidebar
-            chats={chats} activeChatId={activeChatId} userEmail={user?.email}
-            onNewChat={handleNewChat} onSelectChat={handleSelectChat}
-            onDeleteChat={deleteChat} onRenameChat={renameChat}
+            chats={chats}
+            activeChatId={activeChatId}
+            userEmail={user?.email}
+            onNewChat={handleNewChat}
+            onSelectChat={handleSelectChat}
+            onDeleteChat={deleteChat}
+            onRenameChat={renameChat}
+            onSignOut={signOut}
           />
         </div>
       </div>

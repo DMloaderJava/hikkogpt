@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Plus, MessageSquare, Trash2, Pencil, Check, X, Sparkles, Search } from "lucide-react";
+import { Plus, MessageSquare, Trash2, Pencil, Check, X, Sparkles, Search, LogOut } from "lucide-react";
 import type { Chat } from "@/hooks/useChat";
 
 interface ChatSidebarProps {
@@ -10,6 +10,7 @@ interface ChatSidebarProps {
   onSelectChat: (id: string) => void;
   onDeleteChat: (id: string) => void;
   onRenameChat: (id: string, title: string) => void;
+  onSignOut?: () => void;
 }
 
 function groupChatsByDate(chats: Chat[]) {
@@ -185,11 +186,26 @@ export function ChatSidebar({
 
       {/* Footer */}
       <div className="border-t border-sidebar-border p-3">
-        <div className="flex items-center gap-2 rounded-lg px-2 py-2 text-sm hover:bg-sidebar-accent cursor-pointer transition-all">
-          <div className="flex h-7 w-7 items-center justify-center rounded-full bg-interactive text-interactive-foreground text-xs font-medium">
-            {userEmail?.[0]?.toUpperCase() || "U"}
+        <div className="flex items-center justify-between gap-2 rounded-lg px-2 py-2 text-sm hover:bg-sidebar-accent transition-all">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-interactive text-interactive-foreground text-xs font-medium shrink-0">
+              {userEmail?.[0]?.toUpperCase() || "U"}
+            </div>
+            <span className="text-sm truncate">{userEmail || "User"}</span>
           </div>
-          <span className="text-sm truncate">{userEmail || "User"}</span>
+          {onSignOut && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onSignOut();
+              }}
+              className="btn-interactive rounded-lg p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-all shrink-0"
+              title="Выйти из аккаунта"
+              aria-label="Выйти из аккаунта"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
+          )}
         </div>
       </div>
     </div>

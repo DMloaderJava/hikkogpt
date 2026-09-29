@@ -1,5 +1,13 @@
 project_id = "cicxhufrnqiciczeptlu"
 
+[auth]
+enable_signup = true
+
+[auth.email]
+enable_signup = true
+double_confirm_changes = false
+enable_confirmations = false
+
 [functions.chat]
 verify_jwt = false
 

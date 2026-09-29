@@ -57,38 +57,6 @@ serve(async (req) => {
     return json(400, { ok: false, error: 'email and status=approved|rejected|spam required' });
   }
 
-  const apiKey = Deno.env.get('RESEND_API_KEY');
-  if (!apiKey) {
-    // Уведомления — вспомогательная функция: без ключа это не ошибка модерации.
-    return json(200, { ok: true, skipped: 'RESEND_API_KEY not set' });
-  }
-  const from = Deno.env.get('OWNER_NOTIFY_FROM') || 'Hikkomanga <onboarding@resend.dev>';
-
-  const title = (body.title ?? 'ваш тайтл').slice(0, 200);
-  const subject =
-    status === 'approved'
-      ? `Hikkomanga: «${title}» принят — тайтл создан`
-      : `Hikkomanga: «${title}» отклонён`;
-  const main =
-    status === 'approved'
-      ? `<p>Здравствуйте!</p><p>Ваша заявка на тайтл <b>${title}</b> одобрена. Тайтл создан как черновик и скоро появится в каталоге.</p><p>Спасибо за вклад в Hikkomanga!</p>`
-      : `<p>Здравствуйте!</p><p>К сожалению, заявка на тайтл <b>${title}</b> была отклонена.${body.reason ? ` Причина: <i>${body.reason}</i>` : ''}</p><p>Вы можете подать новую заявку с исправлениями.</p>`;
-  // Email заявителя не верифицируется: дисклеймер снимает «репутационный»
-  // риск, когда кто-то указал чужой адрес при подаче фейковой заявки.
-  const html = `${main}<p style="color:#888;font-size:12px">Если вы не подавали заявку на Hikkomanga — проигнорируйте это письмо: возможно, кто-то указал ваш адрес по ошибке.</p>`;
-
-  try {
-    const resendRes = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from, to: [email], subject, html }),
-    });
-    const data = await resendRes.json().catch(() => null);
-    if (!resendRes.ok) {
-      return json(502, { ok: false, error: (data as { message?: string })?.message || `Resend HTTP ${resendRes.status}` });
-    }
-    return json(200, { ok: true, id: (data as { id?: string })?.id });
-  } catch (e) {
-    return json(502, { ok: false, error: (e as Error).message });
-  }
+  // Отправка писем отключена насовсем
+  return json(200, { ok: true, skipped: 'emails_disabled' });
 });

@@ -2,10 +2,8 @@ import { useState, useEffect } from "react";
 import type { User } from "@supabase/supabase-js";
 import { Link, useNavigate } from "react-router-dom";
 import { Sparkles, ArrowLeft, Mail, Lock, Eye, EyeOff, Loader2, AlertCircle } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
 import {
   createSupabasePasswordAuthClient,
-  mapAuthError,
   signInWithoutEmailLink,
   signUpWithoutEmailLink,
 } from "@/lib/passwordAuth";
@@ -16,7 +14,7 @@ interface AuthProps {
   authLoading: boolean;
 }
 
-type AuthMode = "login" | "signup" | "forgot";
+type AuthMode = "login" | "signup";
 
 const Auth = ({ user, authLoading }: AuthProps) => {
   const navigate = useNavigate();
@@ -98,7 +96,7 @@ const Auth = ({ user, authLoading }: AuthProps) => {
     }
 
     try {
-      // Без письма и без ссылки: аккаунт создаётся уже подтверждённым.
+      // Без письма и без ссылки: аккаунт создаётся сразу подтверждённым чисто по email и паролю.
       const result = await signUpWithoutEmailLink(
         createSupabasePasswordAuthClient(),
         email.trim(),
@@ -112,36 +110,6 @@ const Auth = ({ user, authLoading }: AuthProps) => {
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Произошла ошибка при регистрации");
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleForgotPassword = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    setIsLoading(true);
-
-    if (!validateEmail(email)) {
-      setError("Введите корректный email адрес");
-      setIsLoading(false);
-      return;
-    }
-
-    try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-        redirectTo: `${window.location.origin}/auth`,
-      });
-
-      if (error) {
-        setError(mapAuthError(error.message));
-      } else {
-        toast.success("Инструкции по восстановлению пароля отправлены на email");
-        setMode("login");
-        setEmail("");
-      }
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Произошла ошибка");
     } finally {
       setIsLoading(false);
     }
@@ -320,56 +288,6 @@ const Auth = ({ user, authLoading }: AuthProps) => {
     </form>
   );
 
-  const renderForgotForm = () => (
-    <form onSubmit={handleForgotPassword} className="space-y-4">
-      <p className="text-sm text-muted-foreground text-center">
-        Введите email, на который придёт ссылка для сброса пароля
-      </p>
-
-      <div>
-        <label htmlFor="forgot-email" className="block text-sm font-medium text-foreground mb-1.5">
-          Email
-        </label>
-        <div className="relative">
-          <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <input
-            id="forgot-email"
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="you@example.com"
-            className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-            autoComplete="email"
-            autoFocus
-            disabled={isLoading}
-          />
-        </div>
-      </div>
-
-      {error && (
-        <div className="flex items-center gap-2 text-sm text-destructive bg-destructive/10 p-3 rounded-xl">
-          <AlertCircle className="h-4 w-4 shrink-0" />
-          <span>{error}</span>
-        </div>
-      )}
-
-      <button
-        type="submit"
-        disabled={isLoading}
-        className="w-full py-2.5 rounded-xl bg-primary text-primary-foreground font-semibold transition-all hover:bg-primary/90 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-      >
-        {isLoading ? (
-          <>
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Отправка...
-          </>
-        ) : (
-          "Отправить ссылку"
-        )}
-      </button>
-    </form>
-  );
-
   const renderAuthCard = () => (
     <div className="relative w-full max-w-sm animate-fade-in">
       <div className="rounded-2xl border border-border bg-card p-8 shadow-sm">
@@ -380,7 +298,7 @@ const Auth = ({ user, authLoading }: AuthProps) => {
           <div className="text-center">
             <h1 className="text-xl font-bold text-foreground">HikkoGPT</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              {mode === "login" ? "Вход в аккаунт" : mode === "signup" ? "Создание аккаунта" : "Восстановление пароля"}
+              {mode === "login" ? "Вход в аккаунт" : "Создание аккаунта"}
             </p>
           </div>
         </div>
@@ -408,7 +326,6 @@ const Auth = ({ user, authLoading }: AuthProps) => {
 
         {mode === "login" && renderLoginForm()}
         {mode === "signup" && renderSignupForm()}
-        {mode === "forgot" && renderForgotForm()}
 
         <div className="mt-6 space-y-3">
           {mode === "login" && (
@@ -424,17 +341,7 @@ const Auth = ({ user, authLoading }: AuthProps) => {
             </div>
           )}
 
-          {mode === "login" && (
-            <button
-              type="button"
-              onClick={() => { setMode("forgot"); setError(null); }}
-              className="w-full text-sm text-interactive hover:underline"
-            >
-              Забыли пароль?
-            </button>
-          )}
-
-          {(mode === "signup" || mode === "forgot") && (
+          {mode === "signup" && (
             <div className="text-center text-sm text-muted-foreground">
               <span>Уже есть аккаунт? </span>
               <button
