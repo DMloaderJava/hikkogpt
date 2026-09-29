@@ -32,6 +32,7 @@ describe("email confirmation links are disabled", () => {
     const authPage = readFileSync(resolve(process.cwd(), "src/pages/Auth.tsx"), "utf8");
     expect(authPage).not.toMatch(/Проверьте почту/);
     expect(authPage).not.toMatch(/emailRedirectTo/);
+    expect(authPage).not.toMatch(/resetPasswordForEmail/);
     expect(authPage).not.toMatch(/signUp\(/);
     expect(mapAuthError("Email not confirmed")).toBe(EMAIL_LINK_DISABLED_MESSAGE);
     expect(mapAuthError("Email not confirmed")).not.toMatch(/Проверьте почту/);

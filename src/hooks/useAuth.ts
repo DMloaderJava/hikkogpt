@@ -42,9 +42,15 @@ export function useAuth() {
   const signOut = async () => {
     try {
       const { error } = await supabase.auth.signOut();
-      if (error) toast.error(error.message || "Не удалось выйти из аккаунта");
+      if (error) {
+        console.warn("Supabase signOut error:", error);
+      }
     } catch (error: unknown) {
-      toast.error(error instanceof Error ? error.message : "Не удалось выйти из аккаунта");
+      console.warn("Sign out exception:", error);
+    } finally {
+      setSession(null);
+      setUser(null);
+      toast.success("Вы вышли из аккаунта");
     }
   };
 

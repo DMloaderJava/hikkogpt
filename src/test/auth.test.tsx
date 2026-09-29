@@ -87,6 +87,15 @@ describe("Auth page without email-link verification", () => {
     expect(screen.queryByText(/проверьте почту/i)).not.toBeInTheDocument();
   });
 
+  it("does not provide any email-sending recovery or forgot-password form", () => {
+    renderAuth();
+    expect(screen.queryByText(/забыли пароль/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/отправить ссылку/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/восстановление пароля/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Войти" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Регистрация" })).toBeInTheDocument();
+  });
+
   it("redirects already authenticated users to the root page", () => {
     renderAuth(activeUser);
     expect(screen.getByTestId("home-page")).toBeInTheDocument();

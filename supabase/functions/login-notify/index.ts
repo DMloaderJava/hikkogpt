@@ -72,42 +72,13 @@ serve(async (req) => {
     // пустое тело допустимо
   }
 
-  const to = Deno.env.get('OWNER_NOTIFY_EMAIL');
-  const apiKey = Deno.env.get('RESEND_API_KEY');
-  if (!to) {
-    return json(500, { ok: false, error: 'OWNER_NOTIFY_EMAIL secret is not set' });
-  }
-  if (!apiKey) {
-    return json(503, { ok: false, error: 'RESEND_API_KEY secret is not set' });
-  }
-  const from =
-    Deno.env.get('OWNER_NOTIFY_FROM') || 'Hikkomanga Login Guard <onboarding@resend.dev>';
-
-  // session_id из JWT (GoTrue) — multi-device Login Guard.
-  // Без claim RPC возьмёт auth.jwt()->>'session_id' сам; явная передача надёжнее.
-  // authHeader уже проверен выше (401 без Authorization).
-  let sessionId: string | null = null;
-  try {
-    const rawJwt = authHeader.replace(/^Bearer\s+/i, '').trim();
-    const mid = rawJwt.split('.')[1];
-    if (mid) {
-      // atob требует длину, кратную 4 — JWT payload часто без '='.
-      const b64 = mid.replace(/-/g, '+').replace(/_/g, '/');
-      const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4);
-      const json = JSON.parse(atob(padded)) as {
-        session_id?: string;
-        sessionId?: string;
-      };
-      sessionId = json.session_id || json.sessionId || null;
-    }
-  } catch {
-    // fallback: create_login_challenge возьмёт auth.jwt()->>'session_id'
-    sessionId = null;
-  }
-
-  const confirmToken = generateLoginChallengeToken();
-  const ip =
-    payload.ip || req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || undefined;
+  // Письма отключены насовсем. Автоматически одобряем challenge без отправки письма.
+  const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('SUPABASE_ANON_KEY') || '';
+  const adminClient = createClient(
+    Deno.env.get('SUPABASE_URL') ?? '',
+    serviceKey,
+    { auth: { persistSession: false } }
+  );
 
   const { data: challengeId, error: challengeError } = await supabase.rpc(
     'create_login_challenge',
@@ -120,48 +91,18 @@ serve(async (req) => {
       p_session_id: sessionId,
     }
   );
-  if (challengeError || !challengeId) {
-    return json(500, {
-      ok: false,
-      error: challengeError?.message || 'не удалось создать challenge',
+
+  if (!challengeError && challengeId) {
+    await adminClient.rpc('resolve_login_challenge', {
+      p_token: confirmToken,
+      p_action: 'approve',
     });
   }
 
-  const enriched: LoginMailPayload = {
-    ...payload,
-    adminEmail: payload.adminEmail || user.email || undefined,
-    ip,
-    confirmToken,
-  };
-
-  try {
-    const resendRes = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        from,
-        to: [to],
-        subject: buildLoginMailSubject(enriched),
-        html: buildLoginMailHtml(enriched),
-      }),
-    });
-    const data = await resendRes.json().catch(() => null);
-    if (!resendRes.ok) {
-      return json(502, {
-        ok: false,
-        error: (data as { message?: string })?.message || `Resend HTTP ${resendRes.status}`,
-      });
-    }
-    // Токен клиенту не отдаём — только id challenge для отладки.
-    return json(200, {
-      ok: true,
-      challengeId,
-      id: (data as { id?: string })?.id,
-    });
-  } catch (e) {
-    return json(502, { ok: false, error: (e as Error).message });
-  }
+  return json(200, {
+    ok: true,
+    challengeId: challengeId || null,
+    skipped: 'emails_disabled',
+    approved: true,
+  });
 });
