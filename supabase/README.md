@@ -31,19 +31,21 @@ The public catalog was copied and destination counts verified:
 
 The destination has the five bucket definitions (`hikko-originals` private; `manga`, `submissions`, `title-covers`, and `voiceovers` public). **Storage objects are not copied yet.** The source currently has 98 objects: 48 in private `hikko-originals`, 49 in `manga`, and 1 in `title-covers`.
 
-Auth users, user roles, admin requests, per-user encrypted API keys, login challenges, and rate-limit history have not been copied. The source inventory had 4 Auth users (2 confirmed, 2 unconfirmed). Login challenges/rate limits are ephemeral and should start fresh. When migrating users, their password hashes can be preserved; because the destination has a different JWT secret, users must sign in again. Preserve their confirmation status unless the owner explicitly chooses otherwise.
+Auth users, user roles, admin requests, per-user encrypted API keys, login challenges, and rate-limit history have not been copied. The source inventory had 4 Auth users (2 confirmed, 2 unconfirmed). Login challenges/rate limits are ephemeral and should start fresh. When migrating users, their password hashes can be preserved; because the destination has a different JWT secret, users must sign in again. Email confirmation is intentionally off: migration `20260929160000_disable_email_confirmation.sql` confirms unconfirmed accounts so they can sign in without a mail link.
 
 ## Auth settings still to configure
 
-For this hosted project, email confirmation is a Dashboard Auth-provider setting, **not a SQL migration**. The destination currently reports `mailer_autoconfirm=false` (confirmation still enabled).
+Email confirmation links are disabled in the app. Signup goes through the `auth-register` Edge Function, which creates an already-confirmed user and does not send a confirmation email. Login never tells the user to check their inbox. Migration `20260929160000_disable_email_confirmation.sql` confirms existing unconfirmed accounts and confirms new `auth.users` rows on insert, so a leftover confirmation email is not required to sign in.
 
-1. Open **Authentication → Sign In / Providers → Email** and turn **Confirm email** off, then save.
+The hosted GoTrue flag is still separate. Destination previously reported `mailer_autoconfirm=false` (public `signUp` would still send a link). After deploying `auth-register`, the client does not call that public signup path. Also turn **Confirm email** off so a direct `signUp` cannot mail a link:
+
+1. Open **Authentication → Sign In / Providers → Email** and turn **Confirm email** off, then save. Or `PATCH /v1/projects/<ref>/config/auth` with `{ "mailer_autoconfirm": true }`.
 2. Open **Authentication → URL Configuration**. Set Site URL to `https://hikkogpt.vercel.app`; allow the production URL, `https://hikkogpt.vercel.app/auth?mode=reset`, the project's Vercel preview URLs, and local dev URLs (`http://localhost:5173/**`, `http://127.0.0.1:5173/**`).
 3. Consider enabling leaked-password protection if available. For production email flows, configure a custom SMTP provider if the built-in service's rate limit is insufficient. Never put SMTP credentials in this repository.
 
 ## Edge Functions
 
-All 15 local Edge Functions are active on the destination with the same gateway JWT settings as the source. Do not change `verify_jwt` without reviewing the handler's auth path. `submit-title`, `get-submission`, and `login-confirm` intentionally use custom CAPTCHA/rate-limit/one-time-token controls; `gemini-proxy` validates the caller JWT and admin role in the handler.
+Local Edge Functions follow the gateway JWT settings in `config.toml`. `auth-register` is the no-email signup path (`verify_jwt = false`; it confirms the user with the service role and does not return a session). The client does not call public `signUp`, because that sends a confirmation link while Confirm email is on. Deploy the function (`supabase functions deploy auth-register`) and apply `20260929160000_disable_email_confirmation.sql`, or signup cannot skip the letter. Do not change `verify_jwt` without reviewing the handler's auth path. `submit-title`, `get-submission`, and `login-confirm` intentionally use custom CAPTCHA/rate-limit/one-time-token controls; `gemini-proxy` validates the caller JWT and admin role in the handler.
 
 Supabase injects `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` into the Edge runtime. The following app-specific names may need values configured in **Project Settings → Edge Functions → Secrets**; only configure the providers/features the app uses:
 
@@ -56,8 +58,8 @@ Do not paste secret values in chat, SQL, GitHub, or frontend `VITE_*` variables.
 
 ## Remaining cutover checklist
 
-- [ ] Disable email confirmation and set Auth URL allowlist in the destination Dashboard.
-- [ ] Decide/authorize whether to migrate Auth users with password hashes and admin-role records; keep unconfirmed accounts unconfirmed unless explicitly approved.
+- [x] Disable the "check your email" confirmation link in the app (`auth-register` + migration). Still turn **Confirm email** off in the destination Dashboard so public `signUp` cannot send a link, and set the Auth URL allowlist.
+- [ ] Decide/authorize whether to migrate Auth users with password hashes and admin-role records. Unconfirmed accounts are confirmed by `20260929160000_disable_email_confirmation.sql` (mail-link verification is off).
 - [ ] Configure required Edge Function secrets in the destination.
 - [ ] Copy the 98 Storage objects; preserve private bucket visibility; then rewrite public database URLs to the destination.
 - [ ] Transfer remaining admin/user-linked records after users exist in the destination.
