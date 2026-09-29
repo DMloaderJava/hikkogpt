@@ -1,8 +1,14 @@
 import { useState, useEffect } from "react";
 import type { User } from "@supabase/supabase-js";
 import { Link, useNavigate } from "react-router-dom";
-import { Sparkles, ShieldAlert, ArrowLeft, Mail, Lock, Eye, EyeOff, Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
+import { Sparkles, ArrowLeft, Mail, Lock, Eye, EyeOff, Loader2, AlertCircle } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import {
+  createSupabasePasswordAuthClient,
+  mapAuthError,
+  signInWithoutEmailLink,
+  signUpWithoutEmailLink,
+} from "@/lib/passwordAuth";
 import { toast } from "sonner";
 
 interface AuthProps {
@@ -50,13 +56,13 @@ const Auth = ({ user, authLoading }: AuthProps) => {
     }
 
     try {
-      const { error } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
+      const result = await signInWithoutEmailLink(
+        createSupabasePasswordAuthClient(),
+        email.trim(),
         password,
-      });
-
-      if (error) {
-        setError(getAuthErrorMessage(error.message));
+      );
+      if (!result.ok) {
+        setError(result.message);
       } else {
         toast.success("Вы успешно вошли!");
         navigate("/", { replace: true });
@@ -92,17 +98,14 @@ const Auth = ({ user, authLoading }: AuthProps) => {
     }
 
     try {
-      const { error } = await supabase.auth.signUp({
-        email: email.trim(),
+      // Без письма и без ссылки: аккаунт создаётся уже подтверждённым.
+      const result = await signUpWithoutEmailLink(
+        createSupabasePasswordAuthClient(),
+        email.trim(),
         password,
-        options: {
-          // This doesn't disable email confirmation - it must be disabled in Supabase Dashboard
-          // But we can set emailRedirectTo if needed
-        },
-      });
-
-      if (error) {
-        setError(getAuthErrorMessage(error.message));
+      );
+      if (!result.ok) {
+        setError(result.message);
       } else {
         toast.success("Аккаунт создан! Вы вошли в систему.");
         navigate("/", { replace: true });
@@ -131,7 +134,7 @@ const Auth = ({ user, authLoading }: AuthProps) => {
       });
 
       if (error) {
-        setError(getAuthErrorMessage(error.message));
+        setError(mapAuthError(error.message));
       } else {
         toast.success("Инструкции по восстановлению пароля отправлены на email");
         setMode("login");
@@ -142,24 +145,6 @@ const Auth = ({ user, authLoading }: AuthProps) => {
     } finally {
       setIsLoading(false);
     }
-  };
-
-  const getAuthErrorMessage = (message: string): string => {
-    const errors: Record<string, string> = {
-      "Invalid login credentials": "Неверный email или пароль",
-      "Email not confirmed": "Email не подтверждён. Проверьте почту.",
-      "User already registered": "Пользователь с таким email уже зарегистрирован",
-      "Password should be at least 6 characters": "Пароль должен быть минимум 6 символов",
-      "Invalid email": "Неверный формат email",
-      "Email rate limit exceeded": "Слишком много запросов. Попробуйте позже.",
-      "Signup disabled": "Регистрация отключена",
-      "Email confirmations required": "Требуется подтверждение email. Отключите в настройках Supabase.",
-    };
-
-    for (const [key, value] of Object.entries(errors)) {
-      if (message.includes(key)) return value;
-    }
-    return message;
   };
 
   const renderLoginForm = () => (
