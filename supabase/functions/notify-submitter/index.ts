@@ -1,11 +1,10 @@
-// Edge-функция: уведомление заявителя о решении по его анонимной заявке.
-// Вызывается из /admin/requests после resolve, fire-and-forget (ошибка не
-// срывает модерацию). Письмо шлёт только если заявитель оставил email.
+// Edge-функция оставлена для совместимости с админ-клиентом, но email отключён.
+// Вызывается из /admin/requests после resolve и всегда завершает обработку без письма.
 //
 // POST { email, status: 'approved'|'rejected'|'spam', title?, reason?, siteUrl? }
 // Auth: только админ/owner (проверка через has_role, как в login-notify).
 //
-// Секреты: RESEND_API_KEY, OWNER_NOTIFY_FROM (опц.).
+// Внешние email-секреты не требуются.
 // Деплой: supabase functions deploy notify-submitter
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';

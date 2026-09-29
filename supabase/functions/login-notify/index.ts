@@ -1,23 +1,14 @@
-// Supabase Edge Function: обязательное подтверждение входа администратора.
-//
-// 1) Создаёт login_challenge (RPC create_login_challenge) под JWT пользователя.
-// 2) Шлёт письмо владельцу со ссылками approve/deny (токен только в письме).
-// 3) Без успешной отправки письма клиент обязан откатить вход (signOut).
-//
-// Секреты (Supabase → Edge Functions → Secrets, или `supabase secrets set`):
-//   RESEND_API_KEY     — ключ Resend
-//   OWNER_NOTIFY_EMAIL — адрес владельца, куда слать письмо
-//   OWNER_NOTIFY_FROM  — опционально, по умолчанию onboarding@resend.dev
-//
+// Login-notify сохраняет audit challenge администратора без отправки email.
+// После проверки JWT и роли challenge автоматически одобряется; вход не ждёт письма.
 // Деплой: supabase functions deploy login-notify --project-ref <ref>
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import {
-  buildLoginMailHtml,
-  buildLoginMailSubject,
-  type LoginMailPayload,
-} from "../_shared/loginMailTemplate.ts";
+interface LoginMailPayload {
+  adminEmail?: string;
+  userAgent?: string;
+  ip?: string;
+}
 import { generateLoginChallengeToken } from "../_shared/loginChallengeToken.ts";
 
 const corsHeaders = {
@@ -71,6 +62,23 @@ serve(async (req) => {
   } catch {
     // пустое тело допустимо
   }
+
+  // Keep the challenge audit trail, but do not require an email confirmation.
+  let sessionId: string | null = null;
+  try {
+    const rawJwt = authHeader.replace(/^Bearer\s+/i, '').trim();
+    const mid = rawJwt.split('.')[1];
+    if (mid) {
+      const b64 = mid.replace(/-/g, '+').replace(/_/g, '/');
+      const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4);
+      const claims = JSON.parse(atob(padded)) as { session_id?: string; sessionId?: string };
+      sessionId = claims.session_id || claims.sessionId || null;
+    }
+  } catch {
+    sessionId = null;
+  }
+  const confirmToken = generateLoginChallengeToken();
+  const ip = payload.ip || req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || undefined;
 
   // Письма отключены насовсем. Автоматически одобряем challenge без отправки письма.
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('SUPABASE_ANON_KEY') || '';
