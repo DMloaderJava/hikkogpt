@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { render, screen } from "@testing-library/react";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { User } from "@supabase/supabase-js";
 import Auth from "@/pages/Auth";
 
@@ -15,63 +15,44 @@ vi.mock("@/integrations/supabase/client", () => ({
   supabase: { auth: authMocks },
 }));
 
-vi.mock("sonner", () => ({
-  toast: { error: vi.fn(), success: vi.fn() },
-}));
+const activeUser = { id: "user-1" } as User;
 
-const recoveryUser = { id: "user-1" } as User;
-
-function renderAuth(user: User | null = null) {
+function renderAuth(user: User | null = null, initialPath = "/auth") {
   return render(
-    <MemoryRouter>
-      <Auth user={user} authLoading={false} />
+    <MemoryRouter initialEntries={[initialPath]}>
+      <Routes>
+        <Route path="/" element={<div data-testid="home-page">Главная</div>} />
+        <Route path="/auth" element={<Auth user={user} authLoading={false} />} />
+      </Routes>
     </MemoryRouter>
   );
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
-  window.history.replaceState({}, "", "/auth");
-  authMocks.signInWithPassword.mockResolvedValue({ error: null });
-  authMocks.signUp.mockResolvedValue({ error: null, data: { session: null } });
-  authMocks.resetPasswordForEmail.mockResolvedValue({ error: null });
-  authMocks.updateUser.mockResolvedValue({ error: null });
 });
 
-describe("Supabase Auth recovery", () => {
-  it("sends a password reset email with an explicit recovery callback URL", async () => {
+describe("Auth page (email authorization closed)", () => {
+  it("shows notice that email authorization is closed and hides email/password inputs", () => {
     renderAuth();
-    fireEvent.change(screen.getByPlaceholderText("you@example.com"), {
-      target: { value: "reader@example.com" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Забыли пароль?" }));
-    fireEvent.click(screen.getByRole("button", { name: "Отправить ссылку" }));
-
-    await waitFor(() => {
-      expect(authMocks.resetPasswordForEmail).toHaveBeenCalledWith("reader@example.com", {
-        redirectTo: `${window.location.origin}/auth?mode=reset`,
-      });
-    });
+    expect(screen.getByText(/авторизация через почту закрыта/i)).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("you@example.com")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Войти" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Регистрация" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /на главную/i })).toHaveAttribute("href", "/");
   });
 
-  it("allows a recovery session to set a new password instead of redirecting to the app root", async () => {
-    window.history.replaceState({}, "", "/auth?mode=reset");
-    renderAuth(recoveryUser);
-    fireEvent.change(screen.getByPlaceholderText("Минимум 6 символов"), {
-      target: { value: "new-secure-password" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Сохранить новый пароль" }));
-
-    await waitFor(() => {
-      expect(authMocks.updateUser).toHaveBeenCalledWith({ password: "new-secure-password" });
-    });
+  it("keeps email recovery/reset disabled even when recovery query params are present", () => {
+    renderAuth(null, "/auth?mode=reset");
+    expect(screen.getByText(/авторизация через почту закрыта/i)).toBeInTheDocument();
+    expect(authMocks.signInWithPassword).not.toHaveBeenCalled();
+    expect(authMocks.signUp).not.toHaveBeenCalled();
+    expect(authMocks.resetPasswordForEmail).not.toHaveBeenCalled();
+    expect(authMocks.updateUser).not.toHaveBeenCalled();
   });
 
-  it("offers a fresh reset link when a recovery URL has no valid session", () => {
-    window.history.replaceState({}, "", "/auth?mode=reset");
-    renderAuth();
-    expect(screen.getByText(/ссылка для смены пароля недействительна/i)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Запросить новую ссылку" }));
-    expect(screen.getByRole("button", { name: "Отправить ссылку" })).toBeInTheDocument();
+  it("redirects already authenticated users to the root page", () => {
+    renderAuth(activeUser);
+    expect(screen.getByTestId("home-page")).toBeInTheDocument();
   });
 });
