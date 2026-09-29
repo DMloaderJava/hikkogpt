@@ -10,8 +10,19 @@
 // Деплой: supabase functions deploy auth-register
 
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { hashIp, pickClientIp } from "../_shared/submissionCore.ts";
 import { isExistingUserError, parseRegisterInput } from "./logic.ts";
+
+function pickClientIp(cfConnectingIp: string | null | undefined, xForwardedFor: string | null | undefined): string {
+  const cf = cfConnectingIp?.trim();
+  if (cf) return cf;
+  const last = xForwardedFor?.split(",").pop()?.trim();
+  return last || "unknown";
+}
+
+async function hashIp(ip: string, salt: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${ip}${salt}`));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
