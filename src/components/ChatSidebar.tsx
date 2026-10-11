@@ -54,6 +54,7 @@ export function ChatSidebar({
   onSelectChat,
   onDeleteChat,
   onRenameChat,
+  onSignOut,
 }: ChatSidebarProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");

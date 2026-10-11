@@ -106,7 +106,7 @@ describe("email confirmation links are disabled", () => {
     const result = await signUpWithoutEmailLink(auth, "user@example.com", "secret1");
 
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.message).not.toMatch(/Проверьте почту/);
+    if (result.ok === false) expect(result.message).not.toMatch(/Проверьте почту/);
     expect(auth.signUp).not.toHaveBeenCalled();
     expect(auth.signIn).not.toHaveBeenCalled();
   });
