@@ -144,7 +144,8 @@ export async function signUpWithoutEmailLink(
   password: string,
 ): Promise<AuthAttempt> {
   const ensured = await client.ensureAccount({ email, password, action: "register" });
-  if (!ensured.ok) {
+  // `ok === false`: при strict: false отрицательное сужение `!ok` не работает.
+  if (ensured.ok === false) {
     // Публичный signUp не вызываем: при включённом Confirm email он шлёт ссылку.
     return {
       ok: false,
